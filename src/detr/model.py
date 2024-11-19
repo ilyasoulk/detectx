@@ -1,5 +1,6 @@
 from typing import Tuple
 import torch
+import torchvision
 import torch.nn as nn
 from torchvision.models import resnet50
 from torchvision import transforms, datasets
@@ -7,7 +8,6 @@ from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-# Shape of Pascal VOC [3, 442, 500]
 
 def split_into_heads(Q, K, V, num_heads):
     Q = Q.reshape(Q.shape[0], Q.shape[1], num_heads, -1)
@@ -41,44 +41,42 @@ class TransformerDecoder(nn.Module):
 
 
 class DeTr(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, backbone, input_shape) -> None:
         super().__init__()
-        self.backbone = resnet50(pretrained=True)
+        self.backbone = getattr(torchvision.models, backbone)(pretrained=True)
         self.backbone = nn.Sequential(*list(self.backbone.children())[:-2])  # Remove fully connected layers
-        # Outputs shape (B, 2048, 14, 16)
+        # Outputs shape (B, 2048, 16, 16) for input shape (3, 512, 512)
+        self.output_shape = self._compute_output_shape(input_shape)
+        _, C, H, W = self.output_shape
+        self.seq_len = H*W
+        self.pos_embedding = nn.Embedding(num_embeddings=(self.seq_len), embedding_dim=C)
+
+
+    def _compute_output_shape(self, input_shape):
+        dummy_input = torch.randn(1, *input_shape)
+        with torch.no_grad():
+            output = self.backbone(dummy_input)
+        return output.shape
 
     def forward(self, x):
+        # Backbone + Embedding block
         x = self.backbone(x)
-        print(x.shape)
+        x = x.reshape(x.size(0), x.size(1), -1)
+        x = x.transpose(-1, -2)
+        pos_embedding = self.pos_embedding(torch.arange(self.seq_len, device=x.device))
+        x += pos_embedding
+        return x
+
 
 
 if __name__ == "__main__":
 
-# Define basic transformations
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-    ])
-
-# Download PASCAL VOC 2012
-# Set download=True to download if not already present
-# By default downloads to ./data/VOCdevkit/VOC2012/
-    dataset = datasets.VOCDetection(
-        root='../../data',  # where to save the dataset
-        year='2012',    # can use '2007' or '2012'
-        image_set='train',  # can be 'train', 'val', or 'trainval'
-        download=True,
-        transform=transform
-    )
-
-    x, y= dataset[0]
     device = torch.device("mps")
-    model = DeTr()
-    model = model.to(device)
+    input_shape = (3, 512, 512)
+    backbone = "resnet50"
+    model = DeTr(backbone, input_shape)
+    x = torch.randn(1, *input_shape)
     x = x.to(device)
-    x = x.unsqueeze(dim=0)
-    print(x.shape)
+    model = model.to(device)
     y = model(x)
-    
-
-
-
+    print(y.shape) # (1, 256, 2048)
