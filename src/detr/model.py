@@ -1,5 +1,6 @@
 from typing import Tuple
 import torch
+from torch.nn.modules import activation
 import torchvision
 import torch.nn as nn
 from torchvision.models import resnet50
@@ -31,9 +32,35 @@ def head_level_self_attention(Q, K, V):
 def concat_heads(input_tensor):
   return input_tensor.flatten(-2, -1)
 
-class TransformerEncoder(nn.Module):
-    pass
 
+class TransformerEncoder(nn.Module):
+    def __init__(self, hidden_dim, fc_dim, num_heads, activation="relu"):
+        # Input shape : (B, S, H)
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.w_qkv = nn.Linear(hidden_dim, 3*hidden_dim)
+        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.mlp_1 = nn.Linear(hidden_dim, fc_dim)
+        self.mlp_2 = nn.Linear(fc_dim, hidden_dim)
+        self.activation = getattr(nn.functional, activation)
+        self.num_heads = num_heads
+
+    def forward(self, x):
+        ln_1 = self.ln_1(x)
+        x_qkv = self.w_qkv(ln_1)
+        Q, K, V = x_qkv.chunk(3, -1)
+        Q, K, V = split_into_heads(Q, K, V, num_heads=self.num_heads)
+        attn_out, _ = head_level_self_attention(Q, K, V)
+        attn_out = concat_heads(attn_out)
+        attn_out += x
+
+        ln_2 = self.ln_2(attn_out)
+        mlp_1 = self.mlp_1(ln_2)
+        x = self.activation(mlp_1)
+        x = self.mlp_2(x)
+        x += attn_out
+
+        return x
 
 class TransformerDecoder(nn.Module):
     pass
@@ -41,7 +68,7 @@ class TransformerDecoder(nn.Module):
 
 
 class DeTr(nn.Module):
-    def __init__(self, backbone, input_shape) -> None:
+    def __init__(self, backbone, input_shape, fc_dim, num_heads, activ_fn, num_encoder) -> None:
         super().__init__()
         self.backbone = getattr(torchvision.models, backbone)(pretrained=True)
         self.backbone = nn.Sequential(*list(self.backbone.children())[:-2])  # Remove fully connected layers
@@ -50,6 +77,10 @@ class DeTr(nn.Module):
         _, C, H, W = self.output_shape
         self.seq_len = H*W
         self.pos_embedding = nn.Embedding(num_embeddings=(self.seq_len), embedding_dim=C)
+
+        self.encoder = nn.Sequential(
+            *(TransformerEncoder(hidden_dim=C, fc_dim=fc_dim, num_heads=num_heads, activation=activ_fn) for _ in range(num_encoder))
+        )
 
 
     def _compute_output_shape(self, input_shape):
@@ -65,6 +96,9 @@ class DeTr(nn.Module):
         x = x.transpose(-1, -2)
         pos_embedding = self.pos_embedding(torch.arange(self.seq_len, device=x.device))
         x += pos_embedding
+        x = self.encoder(x)
+
+
         return x
 
 
@@ -74,7 +108,11 @@ if __name__ == "__main__":
     device = torch.device("mps")
     input_shape = (3, 512, 512)
     backbone = "resnet50"
-    model = DeTr(backbone, input_shape)
+    num_encoder = 2
+    activ_fn = "relu"
+    num_heads = 8
+    fc_dim = 256
+    model = DeTr(backbone, input_shape, fc_dim, num_heads, activ_fn, num_encoder)
     x = torch.randn(1, *input_shape)
     x = x.to(device)
     model = model.to(device)
