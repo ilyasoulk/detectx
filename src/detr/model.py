@@ -1,5 +1,6 @@
 from typing import Tuple
 import torch
+from torch.autograd import forward_ad
 from torch.nn.modules import activation
 import torchvision
 import torch.nn as nn
@@ -100,12 +101,38 @@ class TransformerDecoder(nn.Module):
 
 
 class PredictionHeads(nn.Module):
-    def __init__(self, num_cls, bbox_features) -> None:
+    def __init__(self, d, num_cls, input_dim) -> None:
         super().__init__()
+        self.box_head = nn.Sequential(
+            nn.Linear(input_dim, d),
+            nn.ReLU(),
+            nn.Linear(d, d),
+            nn.ReLU(),
+        )
+        
+        self.class_head = nn.Sequential(
+            nn.Linear(input_dim, d),
+            nn.ReLU(),
+            nn.Linear(d, d),
+            nn.ReLU(),
+        )
+        
+        self.bbox_output = nn.Linear(d, 4)  # [center_x, center_y, width, height]
+        self.class_output = nn.Linear(d, num_cls + 1)  # +1 for "no object" class
+
+    def forward(self, x):
+        box_head = self.box_head(x)
+        class_head = self.class_head(x)
+
+        bbox = self.bbox_output(box_head)
+        classes = self.class_output(class_head)
+
+        return classes, bbox
+
 
 
 class DeTr(nn.Module):
-    def __init__(self, backbone, input_shape, fc_dim, num_heads, activ_fn, num_encoder, num_decoder, num_obj) -> None:
+    def __init__(self, backbone, input_shape, fc_dim, num_heads, activ_fn, num_encoder, num_decoder, num_obj, d, num_cls) -> None:
         super().__init__()
         self.backbone = getattr(torchvision.models, backbone)(pretrained=True)
         self.backbone = nn.Sequential(*list(self.backbone.children())[:-2])  # Remove fully connected layers
@@ -122,6 +149,8 @@ class DeTr(nn.Module):
             *(TransformerDecoder(C, fc_dim, num_heads, num_obj, activ_fn) for _ in range(num_decoder))
         )
 
+        self.prediction_heads = PredictionHeads(d, num_cls, C)
+
 
     def _compute_output_shape(self, input_shape):
         dummy_input = torch.randn(1, *input_shape)
@@ -130,17 +159,19 @@ class DeTr(nn.Module):
         return output.shape
 
     def forward(self, x):
-        # Backbone + Embedding block
+        # Backbone + Position Embedding + Transformer + Prediction Heads
         x = self.backbone(x)
         x = x.reshape(x.size(0), x.size(1), -1)
         x = x.transpose(-1, -2)
         pos_embedding = self.pos_embedding(torch.arange(self.seq_len, device=x.device))
         x += pos_embedding
+
         x = self.encoder(x)
         x = self.decoder(x)
 
+        classes, bboxes = self.prediction_heads(x)
 
-        return x
+        return classes, bboxes
 
 
 
@@ -155,9 +186,11 @@ if __name__ == "__main__":
     fc_dim = 256
     num_decoder = 2
     num_obj = 128
-    model = DeTr(backbone, input_shape, fc_dim, num_heads, activ_fn, num_encoder, num_decoder, num_obj)
+    d = 50
+    num_cls = 20
+    model = DeTr(backbone, input_shape, fc_dim, num_heads, activ_fn, num_encoder, num_decoder, num_obj, d, num_cls)
     x = torch.randn(1, *input_shape)
     x = x.to(device)
     model = model.to(device)
-    y = model(x)
-    print(y.shape) # (1, 256, 2048)
+    classes, bboxes = model(x)
+    print(classes.shape, bboxes.shape) # (1, num_obj, num_cls), (1, num_obj, 4)
