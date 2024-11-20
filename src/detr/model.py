@@ -1,6 +1,7 @@
 import torch
 import torchvision
 import torch.nn as nn
+import lightning as L
 
 
 def split_into_heads(Q, K, V, num_heads):
@@ -61,7 +62,7 @@ class TransformerDecoder(nn.Module):
     def __init__(self, hidden_dim, fc_dim, num_heads, num_obj, activation="relu") -> None:
         super().__init__()
         self.object_emb = nn.Embedding(num_embeddings=num_obj, embedding_dim=hidden_dim)
-        self.w_self_qkv = nn.Linear(num_obj, 3*num_obj)
+        self.w_self_qkv = nn.Linear(hidden_dim, 3*hidden_dim)
         self.ln_1 = nn.LayerNorm(hidden_dim)
 
         self.ln_2 = nn.LayerNorm(hidden_dim)
@@ -77,10 +78,12 @@ class TransformerDecoder(nn.Module):
 
     def forward(self, x):
         tgt = self.object_emb(torch.arange(self.num_obj, device=x.device))
+        tgt = tgt.expand(x.size(0), -1, -1)
 
         # Self-Attention on objects
         x_qkv = self.w_self_qkv(tgt)
         Q, K, V = x_qkv.chunk(3, -1)
+        # (B, 100, 256)
         Q, K, V = split_into_heads(Q, K, V, num_heads=self.num_heads)
         self_attn_out, _ = head_level_self_attention(Q, K, V)
         self_attn_out = concat_heads(self_attn_out)
@@ -91,7 +94,7 @@ class TransformerDecoder(nn.Module):
         # Cross-attention objects / encoder output
         x_kv = self.w_kv(x)
         K, V = x_kv.chunk(2, -1)
-        Q = self.w_q(objects).unsqueeze(0)
+        Q = self.w_q(objects)
         Q, K, V = split_into_heads(Q, K, V, num_heads=self.num_heads)
         cross_attn_out, _ = head_level_self_attention(Q, K, V)
         cross_attn_out = concat_heads(cross_attn_out)
@@ -127,7 +130,7 @@ class PredictionHeads(nn.Module):
         )
         
         self.bbox_output = nn.Linear(d, 4)  # [xmin, ymin, xmax, ymax]
-        self.class_output = nn.Linear(d, num_cls + 1)  # +1 for "no object" class
+        self.class_output = nn.Linear(d, num_cls)
 
     def forward(self, x):
         box_head = self.box_head(x)
@@ -183,6 +186,8 @@ class DeTr(nn.Module):
         classes, bboxes = self.prediction_heads(x)
 
         return classes, bboxes
+
+
 
 
 
