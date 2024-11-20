@@ -6,16 +6,35 @@ from torchvision.transforms import functional as F
 from torch.utils.data import Dataset, DataLoader
 
 CLASS_TO_IDX = {
-    "aeroplane": 0, "bicycle": 1, "bird": 2, "boat": 3, "bottle": 4,
-    "bus": 5, "car": 6, "cat": 7, "chair": 8, "cow": 9,
-    "diningtable": 10, "dog": 11, "horse": 12, "motorbike": 13, "person": 14,
-    "pottedplant": 15, "sheep": 16, "sofa": 17, "train": 18, "tvmonitor": 19,
-    "background": 20
+    "aeroplane": 0,
+    "bicycle": 1,
+    "bird": 2,
+    "boat": 3,
+    "bottle": 4,
+    "bus": 5,
+    "car": 6,
+    "cat": 7,
+    "chair": 8,
+    "cow": 9,
+    "diningtable": 10,
+    "dog": 11,
+    "horse": 12,
+    "motorbike": 13,
+    "person": 14,
+    "pottedplant": 15,
+    "sheep": 16,
+    "sofa": 17,
+    "train": 18,
+    "tvmonitor": 19,
+    "background": 20,
 }
 
+
 class PascalVOCDataset(Dataset):
-    def __init__(self, root, year='2007', image_set='train', transforms=None):
-        self.voc_dataset = VOCDetection(root=root, year=year, image_set=image_set, download=True)
+    def __init__(self, root, year="2007", image_set="train", transforms=None):
+        self.voc_dataset = VOCDetection(
+            root=root, year=year, image_set=image_set, download=True
+        )
         self.transforms = transforms
 
     def __len__(self):
@@ -23,20 +42,22 @@ class PascalVOCDataset(Dataset):
 
     def parse_voc_annotation(self, annotation):
         boxes, labels = [], []
-        objs = annotation['annotation']['object']
+        objs = annotation["annotation"]["object"]
         if not isinstance(objs, list):
             objs = [objs]
 
         for obj in objs:
-            bbox = obj['bndbox']
-            xmin = float(bbox['xmin'])
-            ymin = float(bbox['ymin'])
-            xmax = float(bbox['xmax'])
-            ymax = float(bbox['ymax'])
+            bbox = obj["bndbox"]
+            xmin = float(bbox["xmin"])
+            ymin = float(bbox["ymin"])
+            xmax = float(bbox["xmax"])
+            ymax = float(bbox["ymax"])
             boxes.append([xmin, ymin, xmax, ymax])
-            labels.append(CLASS_TO_IDX[obj['name']])
+            labels.append(CLASS_TO_IDX[obj["name"]])
 
-        return torch.tensor(boxes, dtype=torch.float32), torch.tensor(labels, dtype=torch.int64)
+        return torch.tensor(boxes, dtype=torch.float32), torch.tensor(
+            labels, dtype=torch.int64
+        )
 
     def __getitem__(self, idx):
         image, target = self.voc_dataset[idx]
@@ -47,21 +68,20 @@ class PascalVOCDataset(Dataset):
         boxes[:, 0::2] /= width
         boxes[:, 1::2] /= height
 
-        target = {
-            "boxes": boxes,
-            "labels":labels
-        }
+        target = {"boxes": boxes, "labels": labels}
 
         if self.transforms:
             image, target = self.transforms(image, target)
 
         return F.to_tensor(image), target
 
+
 class VOCTransforms:
     def __init__(self, train=True):
         self.train = train
-        self.normalize = T.Normalize(mean=[0.485, 0.456, 0.406], 
-                                   std=[0.229, 0.224, 0.225])
+        self.normalize = T.Normalize(
+            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+        )
 
     def __call__(self, image, target):
         # Resize
@@ -71,14 +91,17 @@ class VOCTransforms:
             # Random horizontal flip
             if torch.rand(1) > 0.5:
                 image = F.hflip(image)
-                target['boxes'][:, [0, 2]] = 1 - target['boxes'][:, [2, 0]]
+                target["boxes"][:, [0, 2]] = 1 - target["boxes"][:, [2, 0]]
 
             # Add more augmentations here as needed
             # Example: Random brightness/contrast
             if torch.rand(1) > 0.5:
-                image = F.adjust_brightness(image, brightness_factor=1.0 + 0.2 * (torch.rand(1) - 0.5))
+                image = F.adjust_brightness(
+                    image, brightness_factor=1.0 + 0.2 * (torch.rand(1) - 0.5)
+                )
 
         return image, target
+
 
 class PascalVOCDataModule(L.LightningDataModule):
     def __init__(
@@ -86,7 +109,7 @@ class PascalVOCDataModule(L.LightningDataModule):
         data_dir: str,
         batch_size: int = 2,
         num_workers: int = 4,
-        year: str = '2007'
+        year: str = "2007",
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -99,39 +122,54 @@ class PascalVOCDataModule(L.LightningDataModule):
         train_transforms = VOCTransforms(train=True)
         val_transforms = VOCTransforms(train=False)
 
-        if stage == 'fit' or stage is None:
+        if stage == "fit" or stage is None:
             self.train_dataset = PascalVOCDataset(
                 root=self.data_dir,
                 year=self.year,
-                image_set='train',
-                transforms=train_transforms
+                image_set="train",
+                transforms=train_transforms,
             )
-            
+
             self.val_dataset = PascalVOCDataset(
                 root=self.data_dir,
                 year=self.year,
-                image_set='val',
-                transforms=val_transforms
+                image_set="val",
+                transforms=val_transforms,
             )
 
     @staticmethod
     def collate_fn(batch):
         images = torch.stack([item[0] for item in batch])
-        labels = [item[1]['labels'] for item in batch]
-        boxes = [item[1]['boxes'] for item in batch]
+        labels = [item[1]["labels"] for item in batch]
+        boxes = [item[1]["boxes"] for item in batch]
 
-        # Get the maximum number of classes
-        num_classes = len(CLASS_TO_IDX)
+        # Fixed number of objects (N=100)
+        num_queries = 100
+        num_classes = 21  # 20 classes + background
 
-        # Convert labels to one-hot
-        one_hot_labels = []
-        for label in labels:
-            one_hot = torch.zeros(len(label), num_classes)
-            one_hot[torch.arange(len(label)), label] = 1
-            one_hot_labels.append(one_hot)
+        # Create padded tensors
+        batch_size = len(batch)
+        padded_labels = torch.zeros((batch_size, num_queries, num_classes))
+        padded_boxes = torch.zeros((batch_size, num_queries, 4))
 
-        return images, (one_hot_labels, boxes)
+        # Fill the padded tensors
+        for i in range(batch_size):
+            num_objects = len(labels[i])
+            # Convert labels to one-hot
+            one_hot = torch.zeros(num_objects, num_classes)
+            one_hot[torch.arange(num_objects), labels[i]] = 1
+            padded_labels[i, :num_objects] = one_hot[
+                :num_objects
+            ]  # Only take up to num_queries
+            padded_boxes[i, :num_objects] = boxes[i][
+                :num_objects
+            ]  # Only take up to num_queries
 
+            # Set remaining slots to background class
+            if num_objects < num_queries:
+                padded_labels[i, num_objects:, -1] = 1  # Set background class
+
+        return images, (padded_labels, padded_boxes)
 
     def train_dataloader(self):
         return DataLoader(
@@ -140,7 +178,7 @@ class PascalVOCDataModule(L.LightningDataModule):
             shuffle=True,
             num_workers=self.num_workers,
             collate_fn=self.collate_fn,
-            pin_memory=True
+            pin_memory=True,
         )
 
     def val_dataloader(self):
@@ -150,5 +188,5 @@ class PascalVOCDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             collate_fn=self.collate_fn,
-            pin_memory=True
+            pin_memory=True,
         )
