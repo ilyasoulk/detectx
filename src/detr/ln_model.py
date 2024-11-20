@@ -19,7 +19,7 @@ class LightningDETR(L.LightningModule):
         num_decoder=6,
         num_obj=100,
         d=256,
-        num_cls=20,
+        num_cls=21,
         learning_rate=1e-4,
         weight_decay=1e-4,
         warmup_epochs=10,
