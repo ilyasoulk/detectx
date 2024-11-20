@@ -8,11 +8,10 @@ class HungarianLoss(nn.Module):
         self.lambda_l1 = lambda_l1
         self.lambda_iou = lambda_iou
         
-    def forward(self, x, y):
+    def forward(self, yhat, y):
         # X (classes, bboxes) ((B, N, num_cls), (B, N, 4))
-        cls_pred, bb_pred = x
+        cls_pred, bb_pred = yhat
         cls_gt, bb_gt = y
-        print(f"CLS : {cls_gt}")
         B, N, num_cls = cls_pred.shape
         
         # Classification Loss (Cross Entropy)
