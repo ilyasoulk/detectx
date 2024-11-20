@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class HungarianLoss(nn.Module):
-    def __init__(self, lambda_l1, lambda_iou) -> None:
+    def __init__(self, lambda_l1=5, lambda_iou=2) -> None:
         super().__init__()
         self.lambda_l1 = lambda_l1
         self.lambda_iou = lambda_iou
@@ -12,6 +12,7 @@ class HungarianLoss(nn.Module):
         # X (classes, bboxes) ((B, N, num_cls), (B, N, 4))
         cls_pred, bb_pred = x
         cls_gt, bb_gt = y
+        print(f"CLS : {cls_gt}")
         B, N, num_cls = cls_pred.shape
         
         # Classification Loss (Cross Entropy)
