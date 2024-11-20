@@ -1,5 +1,7 @@
+import lightning as L
 import torch
 from torchvision.datasets import VOCDetection
+from torchvision import transforms as T
 from torchvision.transforms import functional as F
 from torch.utils.data import Dataset, DataLoader
 
@@ -47,7 +49,7 @@ class PascalVOCDataset(Dataset):
 
         target = {
             "boxes": boxes,
-            "labels": labels
+            "labels":labels
         }
 
         if self.transforms:
@@ -55,26 +57,98 @@ class PascalVOCDataset(Dataset):
 
         return F.to_tensor(image), target
 
+class VOCTransforms:
+    def __init__(self, train=True):
+        self.train = train
+        self.normalize = T.Normalize(mean=[0.485, 0.456, 0.406], 
+                                   std=[0.229, 0.224, 0.225])
 
-def collate_fn(batch):
-    images = [item[0] for item in batch]
-    targets = [item[1] for item in batch]
-    return torch.stack(images), targets
+    def __call__(self, image, target):
+        # Resize
+        image = F.resize(image, (512, 512))
+
+        if self.train:
+            # Random horizontal flip
+            if torch.rand(1) > 0.5:
+                image = F.hflip(image)
+                target['boxes'][:, [0, 2]] = 1 - target['boxes'][:, [2, 0]]
+
+            # Add more augmentations here as needed
+            # Example: Random brightness/contrast
+            if torch.rand(1) > 0.5:
+                image = F.adjust_brightness(image, brightness_factor=1.0 + 0.2 * (torch.rand(1) - 0.5))
+
+        return image, target
+
+class PascalVOCDataModule(L.LightningDataModule):
+    def __init__(
+        self,
+        data_dir: str,
+        batch_size: int = 2,
+        num_workers: int = 4,
+        year: str = '2007'
+    ):
+        super().__init__()
+        self.data_dir = data_dir
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.year = year
+
+    def setup(self, stage=None):
+        # Called on every GPU
+        train_transforms = VOCTransforms(train=True)
+        val_transforms = VOCTransforms(train=False)
+
+        if stage == 'fit' or stage is None:
+            self.train_dataset = PascalVOCDataset(
+                root=self.data_dir,
+                year=self.year,
+                image_set='train',
+                transforms=train_transforms
+            )
+            
+            self.val_dataset = PascalVOCDataset(
+                root=self.data_dir,
+                year=self.year,
+                image_set='val',
+                transforms=val_transforms
+            )
+
+    @staticmethod
+    def collate_fn(batch):
+        images = torch.stack([item[0] for item in batch])
+        labels = [item[1]['labels'] for item in batch]
+        boxes = [item[1]['boxes'] for item in batch]
+
+        # Get the maximum number of classes
+        num_classes = len(CLASS_TO_IDX)
+
+        # Convert labels to one-hot
+        one_hot_labels = []
+        for label in labels:
+            one_hot = torch.zeros(len(label), num_classes)
+            one_hot[torch.arange(len(label)), label] = 1
+            one_hot_labels.append(one_hot)
+
+        return images, (one_hot_labels, boxes)
 
 
-def transform(image, target):
-    image = F.resize(image, (512, 512))  # Resize image
-    if torch.rand(1) > 0.5:
-        image = F.hflip(image)  # Horizontal flip
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            collate_fn=self.collate_fn,
+            pin_memory=True
+        )
 
-        # Flip bounding boxes
-        target['boxes'][:, [0, 2]] = 1 - target['boxes'][:, [2, 0]]
-
-    return image, target
-
-
-def get_pascal_voc_dataloader(root, batch_size=8, num_workers=4, year='2007', image_set='train'):
-    dataset = PascalVOCDataset(root=root, year=year, image_set=image_set, transforms=transform)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, collate_fn=collate_fn)
-    return dataloader
-
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            collate_fn=self.collate_fn,
+            pin_memory=True
+        )
