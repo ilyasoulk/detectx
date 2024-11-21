@@ -24,8 +24,8 @@ class LightningDETR(L.LightningModule):
         weight_decay=1e-4,
         warmup_epochs=10,
         max_epochs=300,
-        lambda_l1=1.0,
-        lambda_iou=1.0
+        lambda_l1=5.0,
+        lambda_iou=2.0
     ):
         super().__init__()
         self.save_hyperparameters()
