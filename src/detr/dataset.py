@@ -165,9 +165,8 @@ class PascalVOCDataModule(L.LightningDataModule):
                 :num_objects
             ]  # Only take up to num_queries
 
-            # Set remaining slots to background class
             if num_objects < num_queries:
-                padded_labels[i, num_objects:, -1] = 1  # Set background class
+                padded_labels[i, num_objects:, -1] = num_classes - 1
 
         return images, (padded_labels, padded_boxes)
 
