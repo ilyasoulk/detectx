@@ -113,24 +113,24 @@ class TransformerDecoder(nn.Module):
 
 
 class PredictionHeads(nn.Module):
-    def __init__(self, d, num_cls, input_dim) -> None:
+    def __init__(self, num_cls, hidden_dim) -> None:
         super().__init__()
         self.box_head = nn.Sequential(
-            nn.Linear(input_dim, d),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(d, d),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
         )
         
         self.class_head = nn.Sequential(
-            nn.Linear(input_dim, d),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(d, d),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
         )
         
-        self.bbox_output = nn.Linear(d, 4)  # [xmin, ymin, xmax, ymax]
-        self.class_output = nn.Linear(d, num_cls)
+        self.bbox_output = nn.Linear(hidden_dim, 4)  # [xmin, ymin, xmax, ymax]
+        self.class_output = nn.Linear(hidden_dim, num_cls)
 
     def forward(self, x):
         box_head = self.box_head(x)
@@ -144,7 +144,7 @@ class PredictionHeads(nn.Module):
 
 
 class DeTr(nn.Module):
-    def __init__(self, backbone, hidden_dim, input_shape, fc_dim, num_heads, activ_fn, num_encoder, num_decoder, num_obj, d, num_cls) -> None:
+    def __init__(self, backbone, hidden_dim, input_shape, fc_dim, num_heads, activ_fn, num_encoder, num_decoder, num_obj, num_cls) -> None:
         super().__init__()
         self.backbone = getattr(torchvision.models, backbone)(pretrained=True)
         self.backbone = nn.Sequential(*list(self.backbone.children())[:-2])  # Remove fully connected layers
@@ -162,7 +162,7 @@ class DeTr(nn.Module):
             *(TransformerDecoder(hidden_dim, fc_dim, num_heads, num_obj, activ_fn) for _ in range(num_decoder))
         )
 
-        self.prediction_heads = PredictionHeads(d, num_cls, hidden_dim)
+        self.prediction_heads = PredictionHeads(num_cls, hidden_dim)
 
 
     def _compute_output_shape(self, input_shape):
