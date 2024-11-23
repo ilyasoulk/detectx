@@ -4,28 +4,28 @@ import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from model import DeTr
-from loss import HungarianLoss
+from loss import HungarianLoss, HungarianMatcher
 
 class LightningDETR(L.LightningModule):
     def __init__(
         self,
         backbone="resnet50",
-        hidden_dim=256,
+        hidden_dim=128,
         input_shape=(3, 512, 512),
-        fc_dim=2048,
+        fc_dim=512,
         num_heads=8,
         activ_fn="relu",
-        num_encoder=6,
-        num_decoder=6,
-        num_obj=100,
-        d=256,
+        num_encoder=2,
+        num_decoder=2,
+        num_obj=30,
         num_cls=21,
         learning_rate=1e-4,
         weight_decay=1e-4,
         warmup_epochs=10,
-        max_epochs=300,
+        max_epochs=50,
         lambda_l1=5.0,
-        lambda_iou=2.0
+        lambda_iou=2.0,
+        lambda_cls=1.0
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -41,12 +41,12 @@ class LightningDETR(L.LightningModule):
             num_encoder=num_encoder,
             num_decoder=num_decoder,
             num_obj=num_obj,
-            d=d,
             num_cls=num_cls
         )
         
         # Initialize loss
-        self.criterion = HungarianLoss(lambda_l1=lambda_l1, lambda_iou=lambda_iou)
+        matcher = HungarianMatcher(lambda_l1, lambda_iou, lambda_cls)
+        self.criterion = HungarianLoss(matcher)
 
     def forward(self, x):
         return self.model(x)
