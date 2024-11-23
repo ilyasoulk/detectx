@@ -142,33 +142,7 @@ class PascalVOCDataModule(L.LightningDataModule):
         images = torch.stack([item[0] for item in batch])
         labels = [item[1]["labels"] for item in batch]
         boxes = [item[1]["boxes"] for item in batch]
-
-        # Fixed number of objects (N=100)
-        num_queries = 100
-        num_classes = 21  # 20 classes + background
-
-        # Create padded tensors
-        batch_size = len(batch)
-        padded_labels = torch.zeros((batch_size, num_queries, num_classes))
-        padded_boxes = torch.zeros((batch_size, num_queries, 4))
-
-        # Fill the padded tensors
-        for i in range(batch_size):
-            num_objects = len(labels[i])
-            # Convert labels to one-hot
-            one_hot = torch.zeros(num_objects, num_classes)
-            one_hot[torch.arange(num_objects), labels[i]] = 1
-            padded_labels[i, :num_objects] = one_hot[
-                :num_objects
-            ]  # Only take up to num_queries
-            padded_boxes[i, :num_objects] = boxes[i][
-                :num_objects
-            ]  # Only take up to num_queries
-
-            if num_objects < num_queries:
-                padded_labels[i, num_objects:, -1] = num_classes - 1
-
-        return images, (padded_labels, padded_boxes)
+        return images, (labels, boxes)
 
     def train_dataloader(self):
         return DataLoader(
