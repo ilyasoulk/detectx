@@ -148,10 +148,11 @@ class DeTr(nn.Module):
         super().__init__()
         self.backbone = getattr(torchvision.models, backbone)(pretrained=True)
         self.backbone = nn.Sequential(*list(self.backbone.children())[:-2])  # Remove fully connected layers
-        self.conv = nn.Conv2d(2048, hidden_dim, 1)
-        # Outputs shape (B, hidden_dim, 16, 16) for input shape (3, 512, 512)
+        print(sum([param.numel() for param in self.backbone.parameters()]))
         self.output_shape = self._compute_output_shape(input_shape)
-        _, _, H, W = self.output_shape
+        _, C, H, W = self.output_shape
+        self.conv = nn.Conv2d(C, hidden_dim, 1)
+        # Outputs shape (B, hidden_dim, 16, 16) for input shape (3, 512, 512)
         self.seq_len = H*W
         self.pos_embedding = nn.Embedding(num_embeddings=(self.seq_len), embedding_dim=hidden_dim)
 
