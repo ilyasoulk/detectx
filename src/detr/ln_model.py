@@ -63,7 +63,7 @@ class LightningDETR(L.LightningModule):
             losses["loss_ce"],
             on_step=True,
             on_epoch=True,
-            prog_bar=False,
+            prog_bar=True,
         )
         self.log(
             "train/loss_bbox",
@@ -77,7 +77,7 @@ class LightningDETR(L.LightningModule):
             losses["loss_giou"],
             on_step=True,
             on_epoch=True,
-            prog_bar=False,
+            prog_bar=True,
         )
         self.log(
             "train/total_loss",
@@ -117,16 +117,6 @@ class LightningDETR(L.LightningModule):
 
         optimizer = AdamW(param_dicts, weight_decay=self.hparams.weight_decay)
 
-        scheduler = CosineAnnealingLR(
-            optimizer,
-            T_max=self.hparams.max_epochs,
-            eta_min=self.hparams.learning_rate * 0.01,
-        )
-
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": "val_loss",
-            },
         }
