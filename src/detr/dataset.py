@@ -73,7 +73,7 @@ class PascalVOCDataset(Dataset):
         if self.transforms:
             image, target = self.transforms(image, target)
 
-        return F.to_tensor(image), target
+        return image, target
 
 
 class VOCTransforms:
@@ -85,6 +85,7 @@ class VOCTransforms:
 
     def __call__(self, image, target):
         # Resize
+        image = F.to_tensor(image)
         image = F.resize(image, (512, 512))
 
         if self.train:
@@ -100,6 +101,7 @@ class VOCTransforms:
                     image, brightness_factor=1.0 + 0.2 * (torch.rand(1) - 0.5)
                 )
 
+        image = self.normalize(image)
         return image, target
 
 
@@ -142,6 +144,19 @@ class PascalVOCDataModule(L.LightningDataModule):
         images = torch.stack([item[0] for item in batch])
         labels = [item[1]["labels"] for item in batch]
         boxes = [item[1]["boxes"] for item in batch]
+
+        # num_queries = 30
+        # num_cls = 21 # 20 classes + no object class
+        # batch_size = len(batch)
+        # padded_labels = torch.full((batch_size, num_queries), fill_value=(num_cls - 1))
+        # padded_boxes = torch.zeros(batch_size, num_queries, 4)
+        #
+        # for i in range(batch_size):
+        #     num_objects = len(labels[i])
+        #
+        #     padded_labels[i][:num_objects] = labels[i]
+        #     padded_boxes[i][:num_objects] = boxes[i]
+
         return images, (labels, boxes)
 
     def train_dataloader(self):
