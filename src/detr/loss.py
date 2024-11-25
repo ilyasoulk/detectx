@@ -21,7 +21,6 @@ def box_iou(boxes1, boxes2):
     iou = inter / (union + 1e-6)
     return iou
 
-
 class HungarianMatcher(nn.Module):
     def __init__(self, lambda_l1=5.0, lambda_iou=2.0, lambda_cls=1.0):
         super().__init__()
@@ -36,10 +35,8 @@ class HungarianMatcher(nn.Module):
         cls_gt, bb_gt = y
         B, N, num_cls = cls_pred.shape
 
-        out_prob = cls_pred.flatten(0, 1).softmax(
-            -1
-        )  # [batch_size * num_queries, num_classes]
-        out_bbox = bb_pred.flatten(0, 1)  # [batch_size * num_queries, 4]
+        out_prob = cls_pred.flatten(0, 1).softmax(-1) # [batch_size * num_queries, num_classes]
+        out_bbox = bb_pred.flatten(0, 1) # [batch_size * num_queries, 4]
 
         tgt_ids = torch.cat(cls_gt)
         tgt_bbox = torch.cat(bb_gt)
@@ -51,80 +48,68 @@ class HungarianMatcher(nn.Module):
 
         # IoU Loss
         iou = box_iou(out_bbox, tgt_bbox)
+        giou = (1 - iou.diagonal()).mean()
 
-        C = (
-            self.lambda_iou * iou
-            + self.lambda_l1 * l1_loss
-            + self.lambda_cls * cost_class
-        )
+        C = self.lambda_iou * giou + self.lambda_l1 * l1_loss + self.lambda_cls * cost_class
         C = C.view(B, N, -1).cpu()
         sizes = [len(gt) for gt in cls_gt]
-        indices = [
-            linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))
-        ]
-        indices = [
-            (
-                torch.as_tensor(i, dtype=torch.int64),
-                torch.as_tensor(j, dtype=torch.int64),
-            )
-            for i, j in indices
-        ]
+        indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
+        indices = [(torch.as_tensor(i, dtype=torch.int64),
+            torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
         return indices
 
 
 class HungarianLoss(nn.Module):
-    def __init__(self, matcher, num_classes, eos_coef=0.1):
+    def __init__(self, matcher, num_classes, no_obj_weight=0.1) -> None:
         super().__init__()
         self.matcher = matcher
         self.num_classes = num_classes
-        self.eos_coef = eos_coef  # Weight for no-object class
+        self.no_obj_weight = no_obj_weight
+
         empty_weight = torch.ones(num_classes)
-        empty_weight[-1] = eos_coef  # Lower weight for background class
+        empty_weight[-1] = no_obj_weight
+
         self.register_buffer("empty_weight", empty_weight)
 
     def forward(self, yhat, y):
+        # X (classes, bboxes) ((B, N, num_cls), (B, N, 4))
         cls_pred, bb_pred = yhat
         cls_gt, bb_gt = y
         B, N, _ = cls_pred.shape
         indices = self.matcher(yhat, y)
 
-        # Initialize losses dictionary
-        losses = {"loss_ce": 0, "loss_bbox": 0, "loss_giou": 0}
+        # Compute final losses using matched pairs
+        losses = {"loss_ce": 0.0, "loss_bbox": 0.0, "loss_giou": 0.0}
 
-        # Calculate losses for each batch
+        # Classification loss for matched pairs
         for batch_idx, (pred_idx, tgt_idx) in enumerate(indices):
-            # Classification loss
+            # Create target tensor with background class (num_cls) as default
             target_classes = torch.full(
                 (N,), self.num_classes - 1, dtype=torch.int64, device=cls_pred.device
             )
             target_classes[pred_idx] = cls_gt[batch_idx][tgt_idx]
+            loss_ce = F.cross_entropy(cls_pred[batch_idx], target_classes, weight=self.empty_weight)
+            losses["loss_ce"] += loss_ce.item()
 
-            loss_ce = F.cross_entropy(
-                cls_pred[batch_idx], target_classes, weight=self.empty_weight
-            )
-            losses["loss_ce"] += loss_ce
+            # Box loss for matched pairs
+            src_boxes = bb_pred[batch_idx][pred_idx]
+            target_boxes = bb_gt[batch_idx][tgt_idx]
+            l1_loss = F.l1_loss(src_boxes, target_boxes)
+            losses["loss_bbox"] += l1_loss.item()
 
-            # Box losses for matched pairs
-            if len(pred_idx) > 0:
-                src_boxes = bb_pred[batch_idx][pred_idx]
-                target_boxes = bb_gt[batch_idx][tgt_idx]
-
-                # L1 loss
-                loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction="none")
-                losses["loss_bbox"] += loss_bbox.sum() / len(pred_idx)
-
-                # GIoU loss
-                iou = box_iou(src_boxes, target_boxes)
-                losses["loss_giou"] += (1 - iou.diagonal()).mean()
+            # IoU loss for matched pairs
+            iou = box_iou(src_boxes, target_boxes)
+            giou = (1 - iou.diagonal()).mean()
+            losses["loss_giou"] += giou
 
         # Normalize losses by batch size
         losses = {k: v / B for k, v in losses.items()}
 
         # Compute total loss with weights
         total_loss = (
-            losses["loss_ce"] * 1.0  # Classification weight
-            + losses["loss_bbox"] * 5.0  # L1 weight
-            + losses["loss_giou"] * 2.0  # GIoU weight
+            losses["loss_ce"]
+            + losses["loss_bbox"]
+            + losses["loss_giou"]
         )
 
         losses["total_loss"] = total_loss
@@ -184,13 +169,16 @@ def visualize_boxes(pred_boxes, gt_boxes, matched_indices=None, title="Bounding 
 def test_perfect_alignment(matcher, loss_fn):
     # Predicted boxes and classes
     bb_pred = torch.tensor(
-        [[[0.1, 0.1, 0.3, 0.3], [0.2, 0.2, 0.5, 0.5]]],  # Box 1  # Box 2
+        [
+            [[0.1, 0.1, 0.3, 0.3], [0.2, 0.2, 0.5, 0.5]]
+        ],  # Box 1  # Box 2
         dtype=torch.float32,
     )
 
     cls_pred = torch.zeros((1, 2, 3))  # 3 classes (including background)
     cls_pred[0, 0, 0] = 5.0  # High confidence for class 0 in first box
-    cls_pred[0, 1, 2] = 5.0  # High confidence for class 1 in second box
+    cls_pred[0, 1, 2] = 5.0
+    # cls_pred[0, 2, 1] = 5.0  # High confidence for class 1 in second box
 
     # Ground truth boxes and classes
     bb_gt = [
@@ -211,7 +199,9 @@ def test_perfect_alignment(matcher, loss_fn):
 
     print("Test Case 1: Perfect Alignment")
     print(f"Matched indices: {indices}")
-    print(f"Loss: {loss}") # Loss should be around 0.013 since we match 0 with 0 and 1 with 2. l1_loss = 0, GIoU = 0, nll = log(e**5 + 2) - 5 = 0.013
+    print(
+        f"Loss: {loss}"
+    )  # Loss should be around 0.013 since we match 0 with 0 and 1 with 2. l1_loss = 0, GIoU = 0, nll = log(e**5 + 2) - 5 = 0.013
 
     visualize_boxes(bb_pred[0], bb_gt[0], indices[0], "Test Case 1: Perfect Alignment")
     return loss
@@ -261,7 +251,7 @@ def test_slight_misalignment(matcher, loss_fn):
 # Run the tests
 if __name__ == "__main__":
     matcher = HungarianMatcher()
-    loss_fn = HungarianLoss(matcher, num_classes=3)
+    loss_fn = HungarianLoss(matcher)
 
     loss1 = test_perfect_alignment(matcher, loss_fn)
     loss2 = test_slight_misalignment(matcher, loss_fn)
