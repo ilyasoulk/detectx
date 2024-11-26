@@ -89,13 +89,13 @@ class HungarianLoss(nn.Module):
             )
             target_classes[pred_idx] = cls_gt[batch_idx][tgt_idx]
             loss_ce = F.cross_entropy(cls_pred[batch_idx], target_classes, weight=self.empty_weight)
-            losses["loss_ce"] += loss_ce.item()
+            losses["loss_ce"] += loss_ce
 
             # Box loss for matched pairs
             src_boxes = bb_pred[batch_idx][pred_idx]
             target_boxes = bb_gt[batch_idx][tgt_idx]
             l1_loss = F.l1_loss(src_boxes, target_boxes)
-            losses["loss_bbox"] += l1_loss.item()
+            losses["loss_bbox"] += l1_loss
 
             # IoU loss for matched pairs
             iou = box_iou(src_boxes, target_boxes)
