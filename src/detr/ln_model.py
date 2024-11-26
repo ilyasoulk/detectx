@@ -195,7 +195,7 @@ class LightningDETR(L.LightningModule):
         backbone_params = [p for n, p in self.named_parameters() if "backbone" in n]
         other_params = [p for n, p in self.named_parameters() if "backbone" not in n]
 
-        learning_rate = self.hparams.learning_rate * 0.1
+        learning_rate = self.hparams.learning_rate
         backbone_lr = learning_rate * 0.1
 
         param_dicts = [
