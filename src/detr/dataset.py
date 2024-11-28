@@ -52,7 +52,14 @@ class PascalVOCDataset(Dataset):
             ymin = float(bbox["ymin"])
             xmax = float(bbox["xmax"])
             ymax = float(bbox["ymax"])
-            boxes.append([xmin, ymin, xmax, ymax])
+
+            # Convert to center format (x, y, w, h)
+            x = (xmin + xmax) / 2
+            y = (ymin + ymax) / 2
+            w = xmax - xmin
+            h = ymax - ymin
+
+            boxes.append([x, y, w, h])
             labels.append(CLASS_TO_IDX[obj["name"]])
 
         return torch.tensor(boxes, dtype=torch.float32), torch.tensor(
@@ -146,7 +153,7 @@ class PascalVOCDataModule(L.LightningDataModule):
         boxes = [item[1]["boxes"] for item in batch]
 
         num_queries = 30
-        num_cls = 21 # 20 classes + no object class
+        num_cls = 21  # 20 classes + no object class
         batch_size = len(batch)
         padded_labels = torch.full((batch_size, num_queries), fill_value=(num_cls - 1))
         padded_boxes = torch.zeros(batch_size, num_queries, 4)
