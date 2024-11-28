@@ -145,17 +145,18 @@ class PascalVOCDataModule(L.LightningDataModule):
         labels = [item[1]["labels"] for item in batch]
         boxes = [item[1]["boxes"] for item in batch]
 
-        # num_queries = 30
-        # num_cls = 21 # 20 classes + no object class
-        # batch_size = len(batch)
-        # padded_labels = torch.full((batch_size, num_queries), fill_value=(num_cls - 1))
-        # padded_boxes = torch.zeros(batch_size, num_queries, 4)
-        #
-        # for i in range(batch_size):
-        #     num_objects = len(labels[i])
-        #
-        #     padded_labels[i][:num_objects] = labels[i]
-        #     padded_boxes[i][:num_objects] = boxes[i]
+        num_queries = 30
+        num_cls = 21 # 20 classes + no object class
+        batch_size = len(batch)
+        padded_labels = torch.full((batch_size, num_queries), fill_value=(num_cls - 1))
+        padded_boxes = torch.zeros(batch_size, num_queries, 4)
+
+        for i in range(batch_size):
+            num_objects = len(labels[i])
+            num_objects = min(num_objects, num_queries)
+
+            padded_labels[i][:num_objects] = labels[i][:num_objects]
+            padded_boxes[i][:num_objects] = boxes[i][:num_objects]
 
         return images, (labels, boxes)
 
