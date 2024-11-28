@@ -44,6 +44,20 @@ def generalized_box_iou(boxes1, boxes2):
     return iou - (area - union) / area
 
 
+def box_cxcywh_to_xyxy(x):
+    """Convert boxes from (x, y, w, h) to (xmin, ymin, xmax, ymax)"""
+    x_c, y_c, w, h = x.unbind(-1)
+    b = [(x_c - 0.5 * w), (y_c - 0.5 * h), (x_c + 0.5 * w), (y_c + 0.5 * h)]
+    return torch.stack(b, dim=-1)
+
+
+def box_xyxy_to_cxcywh(x):
+    """Convert boxes from (xmin, ymin, xmax, ymax) to (x, y, w, h)"""
+    x0, y0, x1, y1 = x.unbind(-1)
+    b = [(x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0), (y1 - y0)]
+    return torch.stack(b, dim=-1)
+
+
 class HungarianMatcher(nn.Module):
     def __init__(self, lambda_l1=5.0, lambda_iou=2.0, lambda_cls=1.0):
         super().__init__()
@@ -72,11 +86,14 @@ class HungarianMatcher(nn.Module):
         l1_loss = torch.cdist(out_bbox, tgt_bbox, p=1)
 
         # IoU Loss
-        iou = -box_iou(out_bbox, tgt_bbox)[0]
+        # iou = -box_iou(out_bbox, tgt_bbox)[0]
         # giou = -generalized_box_iou(out_bbox, tgt_bbox)
+        giou = -generalized_box_iou(
+            box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox)
+        )
 
         C = (
-            self.lambda_iou * iou
+            self.lambda_iou * giou
             + self.lambda_l1 * l1_loss
             + self.lambda_cls * cost_class
         )
@@ -115,7 +132,7 @@ class HungarianLoss(nn.Module):
         indices = self.matcher(yhat, y)
 
         # Compute final losses using matched pairs
-        losses = {"loss_ce": 0.0, "loss_bbox": 0.0, "loss_iou": 0.0}
+        losses = {"loss_ce": 0.0, "loss_bbox": 0.0, "loss_giou": 0.0}
 
         # Classification loss for matched pairs
         for batch_idx, (pred_idx, tgt_idx) in enumerate(indices):
@@ -136,17 +153,20 @@ class HungarianLoss(nn.Module):
             losses["loss_bbox"] += l1_loss
 
             # IoU loss for matched pairs
-            iou = box_iou(src_boxes, target_boxes)[0]
-            iou = (1 - iou).mean()
-            # giou = generalized_box_iou(src_boxes, target_boxes)
-            # giou = (1 - giou.diagonal()).mean()
-            losses["loss_iou"] += iou
+            # iou = box_iou(src_boxes, target_boxes)[0]
+            # iou = (1 - iou).mean()
+
+            giou = generalized_box_iou(
+                box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)
+            )
+            giou = (1 - giou.diagonal()).mean()
+            losses["loss_giou"] += giou
 
         # Normalize losses by batch size
         losses = {k: v / B for k, v in losses.items()}
 
         # Compute total loss with weights
-        total_loss = losses["loss_ce"] + losses["loss_bbox"] + losses["loss_iou"]
+        total_loss = losses["loss_ce"] + losses["loss_bbox"] + losses["loss_giou"]
 
         losses["total_loss"] = total_loss
         return losses
@@ -205,7 +225,9 @@ def visualize_boxes(pred_boxes, gt_boxes, matched_indices=None, title="Bounding 
 def test_perfect_alignment(matcher, loss_fn):
     # Predicted boxes and classes
     bb_pred = torch.tensor(
-        [[[0.1, 0.1, 0.3, 0.3], [0.2, 0.2, 0.5, 0.5], [0.4, 0.4, 0.8, 0.8]]],  # Box 1  # Box 2
+        [
+            [[0.1, 0.1, 0.3, 0.3], [0.2, 0.2, 0.5, 0.5], [0.4, 0.4, 0.8, 0.8]]
+        ],  # Box 1  # Box 2
         dtype=torch.float32,
     )
 
@@ -222,7 +244,7 @@ def test_perfect_alignment(matcher, loss_fn):
             [
                 [0.1, 0.1, 0.3, 0.3],
                 [0.25, 0.28, 0.43, 0.49],
-                [0, 0, 0, 0]
+                [0, 0, 0, 0],
             ],  # Box 1  # Box 2
             dtype=torch.float32,
         )
