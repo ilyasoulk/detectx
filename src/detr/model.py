@@ -17,14 +17,13 @@ def head_level_self_attention(Q, K, V):
     V = V.transpose(1, 2)
     d = Q.shape[-1]
 
-
     A = (Q @ K.transpose(-1, -2) / d**0.5).softmax(-1)
     attn_out = A @ V
     return attn_out.transpose(1, 2), A
 
 
 def concat_heads(input_tensor):
-  return input_tensor.flatten(-2, -1)
+    return input_tensor.flatten(-2, -1)
 
 
 class TransformerEncoder(nn.Module):
@@ -32,7 +31,7 @@ class TransformerEncoder(nn.Module):
         # Input shape : (B, S, H)
         super().__init__()
         self.ln_1 = nn.LayerNorm(hidden_dim)
-        self.w_qkv = nn.Linear(hidden_dim, 3*hidden_dim)
+        self.w_qkv = nn.Linear(hidden_dim, 3 * hidden_dim)
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp_1 = nn.Linear(hidden_dim, fc_dim)
         self.mlp_2 = nn.Linear(fc_dim, hidden_dim)
@@ -40,7 +39,7 @@ class TransformerEncoder(nn.Module):
         self.num_heads = num_heads
 
     def forward(self, x):
-        # Self-Attention  
+        # Self-Attention
         x_qkv = self.w_qkv(x)
         Q, K, V = x_qkv.chunk(3, -1)
         Q, K, V = split_into_heads(Q, K, V, num_heads=self.num_heads)
@@ -58,15 +57,24 @@ class TransformerEncoder(nn.Module):
 
         return x
 
+
 class TransformerDecoder(nn.Module):
-    def __init__(self, hidden_dim, fc_dim, num_heads, num_obj, activation="relu") -> None:
+    def __init__(
+        self, hidden_dim, fc_dim, num_heads, num_obj, activation="relu", seq_len=256
+    ) -> None:
         super().__init__()
         self.object_emb = nn.Embedding(num_embeddings=num_obj, embedding_dim=hidden_dim)
-        self.w_self_qkv = nn.Linear(hidden_dim, 3*hidden_dim)
+        self.query_pos_emb = nn.Embedding(
+            num_embeddings=num_obj, embedding_dim=hidden_dim
+        )
+        self.memory_pos_emb = nn.Embedding(
+            num_embeddings=seq_len, embedding_dim=hidden_dim
+        )
+        self.w_self_qkv = nn.Linear(hidden_dim, 3 * hidden_dim)
         self.ln_1 = nn.LayerNorm(hidden_dim)
 
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.w_kv = nn.Linear(hidden_dim, 2*hidden_dim)
+        self.w_kv = nn.Linear(hidden_dim, 2 * hidden_dim)
         self.w_q = nn.Linear(hidden_dim, hidden_dim)
 
         self.ln_3 = nn.LayerNorm(hidden_dim)
@@ -77,28 +85,35 @@ class TransformerDecoder(nn.Module):
         self.num_obj = num_obj
 
     def forward(self, x):
+        # Get object queries and their positions
         tgt = self.object_emb(torch.arange(self.num_obj, device=x.device))
+        query_pos = self.query_pos_emb(torch.arange(self.num_obj, device=x.device))
+        tgt = tgt + query_pos
         tgt = tgt.expand(x.size(0), -1, -1)
+        memory_pos = self.memory_pos_emb(torch.arange(x.size(1), device=x.device))
+        x = x + memory_pos.unsqueeze(0)
 
-        # Self-Attention on objects
+        # Self-Attention on object queries
         x_qkv = self.w_self_qkv(tgt)
         Q, K, V = x_qkv.chunk(3, -1)
-        # (B, 100, 256)
         Q, K, V = split_into_heads(Q, K, V, num_heads=self.num_heads)
         self_attn_out, _ = head_level_self_attention(Q, K, V)
         self_attn_out = concat_heads(self_attn_out)
         self_attn_out += tgt
         objects = self.ln_1(self_attn_out)
 
-
-        # Cross-attention objects / encoder output
+        # Cross-attention between object queries and encoder memory
         x_kv = self.w_kv(x)
         K, V = x_kv.chunk(2, -1)
         Q = self.w_q(objects)
+
+        # Add query positional embeddings to Q
+        Q = Q + query_pos.unsqueeze(0)
+
         Q, K, V = split_into_heads(Q, K, V, num_heads=self.num_heads)
         cross_attn_out, _ = head_level_self_attention(Q, K, V)
         cross_attn_out = concat_heads(cross_attn_out)
-        cross_attn_out += tgt
+        cross_attn_out += objects
         cross_attn_out = self.ln_2(cross_attn_out)
 
         # FFN
@@ -111,7 +126,6 @@ class TransformerDecoder(nn.Module):
         return x
 
 
-
 class PredictionHeads(nn.Module):
     def __init__(self, num_cls, hidden_dim) -> None:
         super().__init__()
@@ -121,14 +135,14 @@ class PredictionHeads(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
         )
-        
+
         self.class_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
         )
-        
+
         self.bbox_output = nn.Linear(hidden_dim, 4)  # [xmin, ymin, xmax, ymax]
         self.class_output = nn.Linear(hidden_dim, num_cls)
 
@@ -142,29 +156,51 @@ class PredictionHeads(nn.Module):
         return classes, bbox
 
 
-
 class DeTr(nn.Module):
-    def __init__(self, backbone, hidden_dim, input_shape, fc_dim, num_heads, activ_fn, num_encoder, num_decoder, num_obj, num_cls) -> None:
+    def __init__(
+        self,
+        backbone,
+        hidden_dim,
+        input_shape,
+        fc_dim,
+        num_heads,
+        activ_fn,
+        num_encoder,
+        num_decoder,
+        num_obj,
+        num_cls,
+    ) -> None:
         super().__init__()
         self.backbone = getattr(torchvision.models, backbone)(pretrained=True)
-        self.backbone = nn.Sequential(*list(self.backbone.children())[:-2])  # Remove fully connected layers
+        self.backbone = nn.Sequential(
+            *list(self.backbone.children())[:-2]
+        )  # Remove fully connected layers
         print(sum([param.numel() for param in self.backbone.parameters()]))
         self.output_shape = self._compute_output_shape(input_shape)
         _, C, H, W = self.output_shape
         self.conv = nn.Conv2d(C, hidden_dim, 1)
         # Outputs shape (B, hidden_dim, 16, 16) for input shape (3, 512, 512)
-        self.seq_len = H*W
-        self.pos_embedding = nn.Embedding(num_embeddings=(self.seq_len), embedding_dim=hidden_dim)
+        self.seq_len = H * W
+        self.pos_embedding = nn.Embedding(
+            num_embeddings=(self.seq_len), embedding_dim=hidden_dim
+        )
 
         self.encoder = nn.Sequential(
-            *(TransformerEncoder(hidden_dim, fc_dim, num_heads, activ_fn) for _ in range(num_encoder))
+            *(
+                TransformerEncoder(hidden_dim, fc_dim, num_heads, activ_fn)
+                for _ in range(num_encoder)
+            )
         )
         self.decoder = nn.Sequential(
-            *(TransformerDecoder(hidden_dim, fc_dim, num_heads, num_obj, activ_fn) for _ in range(num_decoder))
+            *(
+                TransformerDecoder(
+                    hidden_dim, fc_dim, num_heads, num_obj, activ_fn, self.seq_len
+                )
+                for _ in range(num_decoder)
+            )
         )
 
         self.prediction_heads = PredictionHeads(num_cls, hidden_dim)
-
 
     def _compute_output_shape(self, input_shape):
         dummy_input = torch.randn(1, *input_shape)
@@ -189,9 +225,6 @@ class DeTr(nn.Module):
         return classes, bboxes
 
 
-
-
-
 if __name__ == "__main__":
 
     device = torch.device("mps")
@@ -206,9 +239,21 @@ if __name__ == "__main__":
     d = 50
     num_cls = 20
     hidden_dim = 128
-    model = DeTr(backbone, hidden_dim, input_shape, fc_dim, num_heads, activ_fn, num_encoder, num_decoder, num_obj, d, num_cls)
+    model = DeTr(
+        backbone,
+        hidden_dim,
+        input_shape,
+        fc_dim,
+        num_heads,
+        activ_fn,
+        num_encoder,
+        num_decoder,
+        num_obj,
+        d,
+        num_cls,
+    )
     x = torch.randn(1, *input_shape)
     x = x.to(device)
     model = model.to(device)
     classes, bboxes = model(x)
-    print(classes.shape, bboxes.shape) # (1, num_obj, num_cls), (1, num_obj, 4)
+    print(classes.shape, bboxes.shape)  # (1, num_obj, num_cls), (1, num_obj, 4)
