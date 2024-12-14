@@ -74,7 +74,7 @@ class LightningDETR(L.LightningModule):
             {
                 "train/loss_ce": losses["loss_ce"],
                 "train/loss_bbox": losses["loss_bbox"],
-                "train/loss_giou": losses["loss_giou"],
+                "train/loss_iou": losses["loss_iou"],
                 "train/total_loss": losses["total_loss"],
             },
             on_step=True,  # Changed to True to see per-step metrics
@@ -101,8 +101,8 @@ class LightningDETR(L.LightningModule):
             "train/epoch_loss_bbox": torch.stack(
                 [x["loss_bbox"] for x in self.training_step_outputs]
             ).mean(),
-            "train/epoch_loss_giou": torch.stack(
-                [x["loss_giou"] for x in self.training_step_outputs]
+            "train/epoch_loss_iou": torch.stack(
+                [x["loss_iou"] for x in self.training_step_outputs]
             ).mean(),
             "train/epoch_total_loss": torch.stack(
                 [x["total_loss"] for x in self.training_step_outputs]
@@ -144,8 +144,8 @@ class LightningDETR(L.LightningModule):
             sync_dist=True,
         )
         self.log(
-            "val/loss_giou",
-            losses["loss_giou"],
+            "val/loss_iou",
+            losses["loss_iou"],
             on_step=False,
             on_epoch=True,
             prog_bar=False,
@@ -173,8 +173,8 @@ class LightningDETR(L.LightningModule):
             "loss_bbox": torch.stack(
                 [x["loss_bbox"] for x in self.validation_step_outputs]
             ).mean(),
-            "loss_giou": torch.stack(
-                [x["loss_giou"] for x in self.validation_step_outputs]
+            "loss_iou": torch.stack(
+                [x["loss_iou"] for x in self.validation_step_outputs]
             ).mean(),
             "total_loss": torch.stack(
                 [x["total_loss"] for x in self.validation_step_outputs]
@@ -184,7 +184,7 @@ class LightningDETR(L.LightningModule):
         # Log epoch-level metrics
         self.log("val/epoch_loss_ce", epoch_losses["loss_ce"])
         self.log("val/epoch_loss_bbox", epoch_losses["loss_bbox"])
-        self.log("val/epoch_loss_giou", epoch_losses["loss_giou"])
+        self.log("val/epoch_loss_iou", epoch_losses["loss_iou"])
         self.log("val/epoch_total_loss", epoch_losses["total_loss"])
 
         # Clear the list for next epoch
