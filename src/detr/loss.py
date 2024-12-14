@@ -7,18 +7,22 @@ from matplotlib.patches import Rectangle
 
 
 def box_iou(boxes1, boxes2):
-    area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
-    area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
+    area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])  # (N,)
+    area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])  # (M,)
 
-    lt = torch.max(boxes1[:, None, :2], boxes2[:, :2])  # left-top
-    rb = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])  # right-bottom
+    x_min = torch.maximum(boxes1[:, None, 0], boxes2[:, 0])  # (N,M)
+    y_min = torch.maximum(boxes1[:, None, 1], boxes2[:, 1])  # (N,M)
+    x_max = torch.minimum(boxes1[:, None, 2], boxes2[:, 2])  # (N,M)
+    y_max = torch.minimum(boxes1[:, None, 3], boxes2[:, 3])  # (N,M)
 
-    wh = (rb - lt).clamp(min=0)  # intersection
-    inter = wh[:, :, 0] * wh[:, :, 1]
+    intersection = torch.clamp(x_max - x_min, min=0) * torch.clamp(
+        y_max - y_min, min=0
+    )  # (N,M)
 
-    union = area1[:, None] + area2 - inter
+    union = area1[:, None] + area2 - intersection  # (N,M)
 
-    iou = inter / (union + 1e-6)
+    iou = intersection / (union + 1e-6)
+
     return iou, union
 
 
@@ -82,18 +86,18 @@ class HungarianMatcher(nn.Module):
         # Classification Loss (Cross Entropy)
         cost_class = -out_prob[:, tgt_ids]
 
-        # L1 Loss
+        # L2 Loss
         l1_loss = torch.cdist(out_bbox, tgt_bbox, p=1)
 
         # IoU Loss
-        # iou = -box_iou(out_bbox, tgt_bbox)[0]
+        iou = -box_iou(out_bbox, tgt_bbox)[0]
         # giou = -generalized_box_iou(out_bbox, tgt_bbox)
-        giou = -generalized_box_iou(
-            box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox)
-        )
+        # giou = -generalized_box_iou(
+        #     box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox)
+        # )
 
         C = (
-            self.lambda_iou * giou
+            self.lambda_iou * iou
             + self.lambda_l1 * l1_loss
             + self.lambda_cls * cost_class
         )
@@ -132,7 +136,7 @@ class HungarianLoss(nn.Module):
         indices = self.matcher(yhat, y)
 
         # Compute final losses using matched pairs
-        losses = {"loss_ce": 0.0, "loss_bbox": 0.0, "loss_giou": 0.0}
+        losses = {"loss_ce": 0.0, "loss_bbox": 0.0, "loss_iou": 0.0}
 
         # Classification loss for matched pairs
         for batch_idx, (pred_idx, tgt_idx) in enumerate(indices):
@@ -153,20 +157,20 @@ class HungarianLoss(nn.Module):
             losses["loss_bbox"] += l1_loss
 
             # IoU loss for matched pairs
-            # iou = box_iou(src_boxes, target_boxes)[0]
-            # iou = (1 - iou).mean()
+            iou = box_iou(src_boxes, target_boxes)[0]
+            iou = (1 - iou.diagonal()).mean()
 
-            giou = generalized_box_iou(
-                box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)
-            )
-            giou = (1 - giou.diagonal()).mean()
-            losses["loss_giou"] += giou
+            # giou = generalized_box_iou(
+            #     box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)
+            # )
+            # giou = (1 - giou.diagonal()).mean()
+            losses["loss_iou"] += iou
 
         # Normalize losses by batch size
         losses = {k: v / B for k, v in losses.items()}
 
         # Compute total loss with weights
-        total_loss = losses["loss_ce"] + losses["loss_bbox"] + losses["loss_giou"]
+        total_loss = losses["loss_ce"] + losses["loss_bbox"] + losses["loss_iou"]
 
         losses["total_loss"] = total_loss
         return losses

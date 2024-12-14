@@ -53,13 +53,7 @@ class PascalVOCDataset(Dataset):
             xmax = float(bbox["xmax"])
             ymax = float(bbox["ymax"])
 
-            # Convert to center format (x, y, w, h)
-            x = (xmin + xmax) / 2
-            y = (ymin + ymax) / 2
-            w = xmax - xmin
-            h = ymax - ymin
-
-            boxes.append([x, y, w, h])
+            boxes.append([xmin, ymin, xmax, ymax])
             labels.append(CLASS_TO_IDX[obj["name"]])
 
         return torch.tensor(boxes, dtype=torch.float32), torch.tensor(
@@ -84,31 +78,60 @@ class PascalVOCDataset(Dataset):
 
 
 class VOCTransforms:
-    def __init__(self, train=True):
+    def __init__(self, train=True, normalize=True):
         self.train = train
         self.normalize = T.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
         )
+        self.do_normalize = normalize
+        self.target_size = (512, 512)
 
     def __call__(self, image, target):
-        # Resize
+        # Get original dimensions
+        orig_width, orig_height = image.size
+
+        # Convert image to tensor
         image = F.to_tensor(image)
-        image = F.resize(image, (512, 512))
+
+        # Resize image
+        image = F.resize(image, self.target_size)
+
+        # Adjust box coordinates for the new size
+        boxes = target["boxes"]
+        # Convert from normalized to absolute coordinates
+        boxes[:, [0, 2]] *= orig_width  # x coordinates (xmin, xmax)
+        boxes[:, [1, 3]] *= orig_height  # y coordinates (ymin, ymax)
+
+        # Scale boxes to new dimensions
+        scale_x = self.target_size[1] / orig_width
+        scale_y = self.target_size[0] / orig_height
+
+        boxes[:, [0, 2]] *= scale_x  # scale x coordinates
+        boxes[:, [1, 3]] *= scale_y  # scale y coordinates
+
+        # Normalize boxes to [0, 1]
+        boxes[:, [0, 2]] /= self.target_size[1]  # x coordinates
+        boxes[:, [1, 3]] /= self.target_size[0]  # y coordinates
+
+        target["boxes"] = boxes
 
         if self.train:
             # Random horizontal flip
             if torch.rand(1) > 0.5:
                 image = F.hflip(image)
-                target["boxes"][:, [0, 2]] = 1 - target["boxes"][:, [2, 0]]
+                # For xmin, xmax format, we need to flip both coordinates
+                boxes[:, [0, 2]] = 1 - boxes[:, [2, 0]]  # Flip and swap xmin, xmax
+                target["boxes"] = boxes
 
             # Add more augmentations here as needed
-            # Example: Random brightness/contrast
             if torch.rand(1) > 0.5:
                 image = F.adjust_brightness(
                     image, brightness_factor=1.0 + 0.2 * (torch.rand(1) - 0.5)
                 )
 
-        image = self.normalize(image)
+        if self.do_normalize:
+            image = self.normalize(image)
+
         return image, target
 
 
@@ -119,17 +142,19 @@ class PascalVOCDataModule(L.LightningDataModule):
         batch_size: int = 2,
         num_workers: int = 4,
         year: str = "2007",
+        normalize: bool = True,
     ):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.year = year
+        self.normalize = normalize
 
     def setup(self, stage=None):
         # Called on every GPU
-        train_transforms = VOCTransforms(train=True)
-        val_transforms = VOCTransforms(train=False)
+        train_transforms = VOCTransforms(train=True, normalize=self.normalize)
+        val_transforms = VOCTransforms(train=False, normalize=self.normalize)
 
         if stage == "fit" or stage is None:
             self.train_dataset = PascalVOCDataset(
@@ -147,25 +172,36 @@ class PascalVOCDataModule(L.LightningDataModule):
             )
 
     @staticmethod
-    def collate_fn(batch):
+    def collate_fn(batch, num_queries=30):
         images = torch.stack([item[0] for item in batch])
-        labels = [item[1]["labels"] for item in batch]
-        boxes = [item[1]["boxes"] for item in batch]
-
-        num_queries = 30
-        num_cls = 21  # 20 classes + no object class
         batch_size = len(batch)
-        padded_labels = torch.full((batch_size, num_queries), fill_value=(num_cls - 1))
-        padded_boxes = torch.zeros(batch_size, num_queries, 4)
+
+        # Initialize lists to store padded tensors
+        padded_labels_list = []
+        padded_boxes_list = []
 
         for i in range(batch_size):
-            num_objects = len(labels[i])
-            num_objects = min(num_objects, num_queries)
+            labels = batch[i][1]["labels"]
+            boxes = batch[i][1]["boxes"]
 
-            padded_labels[i][:num_objects] = labels[i][:num_objects]
-            padded_boxes[i][:num_objects] = boxes[i][:num_objects]
+            # Get number of objects (limited by num_queries)
+            num_objects = min(len(labels), num_queries)
 
-        return images, (labels, boxes)
+            # Create padded tensor for this batch item
+            padded_labels = torch.full(
+                (num_queries,), fill_value=20
+            )  # 20 is background class
+            padded_boxes = torch.zeros((num_queries, 4))
+
+            # Fill with actual values
+            padded_labels[:num_objects] = labels[:num_objects]
+            padded_boxes[:num_objects] = boxes[:num_objects]
+
+            # Add to lists
+            padded_labels_list.append(padded_labels)
+            padded_boxes_list.append(padded_boxes)
+
+        return images, (padded_labels_list, padded_boxes_list)
 
     def train_dataloader(self):
         return DataLoader(
