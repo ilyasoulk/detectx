@@ -4,6 +4,7 @@ from torchvision.datasets import VOCDetection
 from torchvision import transforms as T
 from torchvision.transforms import functional as F
 from torch.utils.data import Dataset, DataLoader
+from loss import box_xyxy_to_cxcywh
 
 CLASS_TO_IDX = {
     "aeroplane": 0,
@@ -113,21 +114,22 @@ class VOCTransforms:
         boxes[:, [0, 2]] /= self.target_size[1]  # x coordinates
         boxes[:, [1, 3]] /= self.target_size[0]  # y coordinates
 
-        target["boxes"] = boxes
-
         if self.train:
             # Random horizontal flip
             if torch.rand(1) > 0.5:
                 image = F.hflip(image)
                 # For xmin, xmax format, we need to flip both coordinates
                 boxes[:, [0, 2]] = 1 - boxes[:, [2, 0]]  # Flip and swap xmin, xmax
-                target["boxes"] = boxes
 
             # Add more augmentations here as needed
             if torch.rand(1) > 0.5:
                 image = F.adjust_brightness(
                     image, brightness_factor=1.0 + 0.2 * (torch.rand(1) - 0.5)
                 )
+
+        # Convert boxes from xyxy to cxcywh format
+        boxes = box_xyxy_to_cxcywh(boxes)
+        target["boxes"] = boxes
 
         if self.do_normalize:
             image = self.normalize(image)
@@ -182,7 +184,7 @@ class PascalVOCDataModule(L.LightningDataModule):
 
         for i in range(batch_size):
             labels = batch[i][1]["labels"]
-            boxes = batch[i][1]["boxes"]
+            boxes = batch[i][1]["boxes"]  # boxes are already in cxcywh format
 
             # Get number of objects (limited by num_queries)
             num_objects = min(len(labels), num_queries)

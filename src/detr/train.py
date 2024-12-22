@@ -17,13 +17,13 @@ def main():
             "backbone": "resnet18",
             "dataset": "PASCAL VOC",
             "epochs": 50,
-            "batch_size": 2,
-            "learning_rate": 1e-4,
+            "batch_size": 64,
+            "learning_rate": 5e-5,
         },
     )
 
     data_module = PascalVOCDataModule(
-        data_dir="../../data", batch_size=2, num_workers=4
+        data_dir="../../data", batch_size=8, num_workers=4
     )
 
     wandb_logger = WandbLogger(
@@ -54,6 +54,7 @@ def main():
         num_decoder=3,
         num_obj=30,
         num_cls=21,
+        learning_rate=1e-3,
     )
 
     trainer = L.Trainer(
@@ -62,8 +63,8 @@ def main():
         accelerator="mps",
         devices=1,
         precision="16-mixed",
-        gradient_clip_val=0.1,
-        gradient_clip_algorithm="norm",
+        # gradient_clip_val=0.1,
+        # gradient_clip_algorithm="norm",
         logger=wandb_logger,
         log_every_n_steps=1,  # Add this to control logging frequency
     )
