@@ -167,3 +167,4 @@ src/detr/lightning_logs
 src/detr/wandb
 src/detr/checkpoints
 lightning_logs
+uv.lock
