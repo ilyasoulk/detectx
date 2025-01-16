@@ -1,226 +1,206 @@
-import lightning as L
 import torch
-from torchvision.datasets import VOCDetection
-from torchvision import transforms as T
-from torchvision.transforms import functional as F
-from torch.utils.data import Dataset, DataLoader
-from loss import box_xyxy_to_cxcywh
-
-CLASS_TO_IDX = {
-    "aeroplane": 0,
-    "bicycle": 1,
-    "bird": 2,
-    "boat": 3,
-    "bottle": 4,
-    "bus": 5,
-    "car": 6,
-    "cat": 7,
-    "chair": 8,
-    "cow": 9,
-    "diningtable": 10,
-    "dog": 11,
-    "horse": 12,
-    "motorbike": 13,
-    "person": 14,
-    "pottedplant": 15,
-    "sheep": 16,
-    "sofa": 17,
-    "train": 18,
-    "tvmonitor": 19,
-    "background": 20,
-}
+import torchvision.transforms as T
+from torchvision import ops, datasets
+import matplotlib.pyplot as plt
 
 
-class PascalVOCDataset(Dataset):
-    def __init__(self, root, year="2007", image_set="train", transforms=None):
-        self.voc_dataset = VOCDetection(
-            root=root, year=year, image_set=image_set, download=True
+CLASSES = [
+    "N/A",
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "N/A",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "N/A",
+    "backpack",
+    "umbrella",
+    "N/A",
+    "N/A",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "N/A",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "N/A",
+    "dining table",
+    "N/A",
+    "N/A",
+    "toilet",
+    "N/A",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "N/A",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush",
+    "empty",
+]
+
+# Colors for visualization
+COLORS = [
+    [0.000, 0.447, 0.741],
+    [0.850, 0.325, 0.098],
+    [0.929, 0.694, 0.125],
+    [0.494, 0.184, 0.556],
+    [0.466, 0.674, 0.188],
+    [0.301, 0.745, 0.933],
+]
+COLORS *= 100
+
+revert_normalization = T.Normalize(
+    mean=[-0.485 / 0.229, -0.456 / 0.224, -0.406 / 0.225],
+    std=[1 / 0.229, 1 / 0.224, 1 / 0.225],
+)
+
+
+def plot_im_with_boxes(im, boxes, probs=None, ax=None):
+    if ax is None:
+        plt.imshow(im)
+        ax = plt.gca()
+
+    for i, b in enumerate(boxes.tolist()):
+        xmin, ymin, xmax, ymax = b
+
+        patch = plt.Rectangle(
+            (xmin, ymin),
+            xmax - xmin,
+            ymax - ymin,
+            fill=False,
+            color=COLORS[i],
+            linewidth=2,
         )
-        self.transforms = transforms
 
-    def __len__(self):
-        return len(self.voc_dataset)
+        ax.add_patch(patch)
+        if probs is not None:
+            if probs.ndim == 1:
+                cl = probs[i].item()
+                text = f"{CLASSES[cl]}"
+            else:
+                cl = probs[i].argmax().item()
+                text = f"{CLASSES[cl]}: {probs[i,cl]:0.2f}"
+        else:
+            text = ""
 
-    def parse_voc_annotation(self, annotation):
-        boxes, labels = [], []
-        objs = annotation["annotation"]["object"]
-        if not isinstance(objs, list):
-            objs = [objs]
+        ax.text(xmin, ymin, text, fontsize=7, bbox=dict(facecolor="yellow", alpha=0.5))
 
-        for obj in objs:
-            bbox = obj["bndbox"]
-            xmin = float(bbox["xmin"])
-            ymin = float(bbox["ymin"])
-            xmax = float(bbox["xmax"])
-            ymax = float(bbox["ymax"])
 
-            boxes.append([xmin, ymin, xmax, ymax])
-            labels.append(CLASS_TO_IDX[obj["name"]])
+class MyCocoDetection(datasets.CocoDetection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.edge = 512
 
-        return torch.tensor(boxes, dtype=torch.float32), torch.tensor(
-            labels, dtype=torch.int64
+        self.T = T.Compose(
+            [
+                T.ToTensor(),
+                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                T.Resize((self.edge, self.edge), antialias=True),
+            ]
         )
+
+        self.T_target = preprocess_target
 
     def __getitem__(self, idx):
-        image, target = self.voc_dataset[idx]
-        boxes, labels = self.parse_voc_annotation(target)
-        width, height = image.size
+        img, target = super().__getitem__(idx)
+        # PIL image
+        w, h = img.size
 
-        # Normalize bounding boxes to [0, 1]
-        boxes[:, 0::2] /= width
-        boxes[:, 1::2] /= height
+        input_ = self.T(img)
+        classes, boxes = self.T_target(target, w, h)
 
-        target = {"boxes": boxes, "labels": labels}
-
-        if self.transforms:
-            image, target = self.transforms(image, target)
-
-        return image, target
+        return input_, (classes, boxes)
 
 
-class VOCTransforms:
-    def __init__(self, train=True, normalize=True):
-        self.train = train
-        self.normalize = T.Normalize(
-            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-        )
-        self.do_normalize = normalize
-        self.target_size = (512, 512)
-
-    def __call__(self, image, target):
-        # Get original dimensions
-        orig_width, orig_height = image.size
-
-        # Convert image to tensor
-        image = F.to_tensor(image)
-
-        # Resize image
-        image = F.resize(image, self.target_size)
-
-        # Adjust box coordinates for the new size
-        boxes = target["boxes"]
-        # Convert from normalized to absolute coordinates
-        boxes[:, [0, 2]] *= orig_width  # x coordinates (xmin, xmax)
-        boxes[:, [1, 3]] *= orig_height  # y coordinates (ymin, ymax)
-
-        # Scale boxes to new dimensions
-        scale_x = self.target_size[1] / orig_width
-        scale_y = self.target_size[0] / orig_height
-
-        boxes[:, [0, 2]] *= scale_x  # scale x coordinates
-        boxes[:, [1, 3]] *= scale_y  # scale y coordinates
-
-        # Normalize boxes to [0, 1]
-        boxes[:, [0, 2]] /= self.target_size[1]  # x coordinates
-        boxes[:, [1, 3]] /= self.target_size[0]  # y coordinates
-
-        if self.train:
-            # Random horizontal flip
-            if torch.rand(1) > 0.5:
-                image = F.hflip(image)
-                # For xmin, xmax format, we need to flip both coordinates
-                boxes[:, [0, 2]] = 1 - boxes[:, [2, 0]]  # Flip and swap xmin, xmax
-
-            # Add more augmentations here as needed
-            if torch.rand(1) > 0.5:
-                image = F.adjust_brightness(
-                    image, brightness_factor=1.0 + 0.2 * (torch.rand(1) - 0.5)
-                )
-
-        # Convert boxes from xyxy to cxcywh format
-        boxes = box_xyxy_to_cxcywh(boxes)
-        target["boxes"] = boxes
-
-        if self.do_normalize:
-            image = self.normalize(image)
-
-        return image, target
+def collate_fn(inputs):
+    input_ = torch.stack([i[0] for i in inputs])
+    classes = tuple([i[1][0] for i in inputs])
+    boxes = tuple([i[1][1] for i in inputs])
+    return input_, (classes, boxes)
 
 
-class PascalVOCDataModule(L.LightningDataModule):
-    def __init__(
-        self,
-        data_dir: str,
-        batch_size: int = 2,
-        num_workers: int = 4,
-        year: str = "2007",
-        normalize: bool = True,
-    ):
-        super().__init__()
-        self.data_dir = data_dir
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.year = year
-        self.normalize = normalize
+def preprocess_target(anno, im_w, im_h):
+    anno = [obj for obj in anno if "iscrowd" not in obj or obj["iscrowd"] == 0]
 
-    def setup(self, stage=None):
-        # Called on every GPU
-        train_transforms = VOCTransforms(train=True, normalize=self.normalize)
-        val_transforms = VOCTransforms(train=False, normalize=self.normalize)
+    boxes = [obj["bbox"] for obj in anno]
+    boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
 
-        if stage == "fit" or stage is None:
-            self.train_dataset = PascalVOCDataset(
-                root=self.data_dir,
-                year=self.year,
-                image_set="train",
-                transforms=train_transforms,
-            )
+    # xywh -> xyxy
+    boxes[:, 2:] += boxes[:, :2]
+    boxes[:, 0::2].clamp_(min=0, max=im_w)
+    boxes[:, 1::2].clamp_(min=0, max=im_h)
+    keep = (boxes[:, 3] > boxes[:, 1]) & (boxes[:, 2] > boxes[:, 0])
+    boxes = boxes[keep]
 
-            self.val_dataset = PascalVOCDataset(
-                root=self.data_dir,
-                year=self.year,
-                image_set="val",
-                transforms=val_transforms,
-            )
+    classes = [obj["category_id"] for obj in anno]
+    classes = torch.tensor(classes, dtype=torch.int64)
+    classes = classes[keep]
 
-    @staticmethod
-    def collate_fn(batch, num_queries=30):
-        images = torch.stack([item[0] for item in batch])
-        batch_size = len(batch)
+    # scales boxes to [0,1]
+    boxes[:, 0::2] /= im_w
+    boxes[:, 1::2] /= im_h
+    boxes.clamp_(min=0, max=1)
 
-        # Initialize lists to store padded tensors
-        padded_labels_list = []
-        padded_boxes_list = []
-
-        for i in range(batch_size):
-            labels = batch[i][1]["labels"]
-            boxes = batch[i][1]["boxes"]  # boxes are already in cxcywh format
-
-            # Get number of objects (limited by num_queries)
-            num_objects = min(len(labels), num_queries)
-
-            # Create padded tensor for this batch item
-            padded_labels = torch.full(
-                (num_queries,), fill_value=20
-            )  # 20 is background class
-            padded_boxes = torch.zeros((num_queries, 4))
-
-            # Fill with actual values
-            padded_labels[:num_objects] = labels[:num_objects]
-            padded_boxes[:num_objects] = boxes[:num_objects]
-
-            # Add to lists
-            padded_labels_list.append(padded_labels)
-            padded_boxes_list.append(padded_boxes)
-
-        return images, (padded_labels_list, padded_boxes_list)
-
-    def train_dataloader(self):
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=self.num_workers,
-            collate_fn=self.collate_fn,
-            pin_memory=True,
-        )
-
-    def val_dataloader(self):
-        return DataLoader(
-            self.val_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            collate_fn=self.collate_fn,
-            pin_memory=True,
-        )
+    boxes = ops.box_convert(boxes, in_fmt="xyxy", out_fmt="cxcywh")
+    return classes, boxes
