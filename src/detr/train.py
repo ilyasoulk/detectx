@@ -4,7 +4,6 @@ from torch.utils.data import DataLoader
 import torch
 
 
-# In your training script
 def main():
     weight_dict = {"ce": 5, "bbox": 2, "giou": 2}
     batch_size = 4
@@ -26,7 +25,6 @@ def main():
     # Initialize best mAP tracking instead of best loss
     best_map = 0.0  # Start from 0 since mAP ranges from 0 to 1
 
-    # Create train and validation datasets
     train_ds = MyVOCDetection(
         root="./data_voc", year="2012", image_set="train", download=True
     )
@@ -45,22 +43,20 @@ def main():
     val_results = []
     train_results = []
     for epoch in range(epochs):
-        # Training phase
         train_loss, train_metrics = train_one_epoch(
             model, criterion, train_loader, optimizer, device, epoch, max_norm=0.1
         )
 
         train_results.append(train_metrics)
 
-        # Validation phase
-        val_loss, val_metrics = evaluate(model, criterion, val_loader, device)
-
-        val_results.append(val_metrics)
+        if epoch % 10 == 0:
+            val_loss, val_metrics = evaluate(model, criterion, val_loader, device)
+            val_results.append(val_metrics)
 
         print(f"\nEpoch {epoch}")
         print(f"mAP train : {train_metrics}")
-        print(f"mAP val : {val_metrics}")
         print(f"Training Loss: {train_loss:.4f}")
+        print(f"mAP val : {val_metrics}")
         print(f"Validation Loss: {val_loss:.4f}")
 
         # Save if this is the best model based on validation mAP
