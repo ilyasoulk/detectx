@@ -1,7 +1,6 @@
 import torch
 import torchvision
 import torch.nn as nn
-import lightning as L
 
 
 def split_into_heads(Q, K, V, num_heads):
@@ -27,7 +26,7 @@ def concat_heads(input_tensor):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, hidden_dim, fc_dim, num_heads, activation="relu"):
+    def __init__(self, hidden_dim, fc_dim, num_heads, activation="relu", dropout=0.1):
         # Input shape : (B, S, H)
         super().__init__()
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -37,30 +36,51 @@ class TransformerEncoder(nn.Module):
         self.mlp_2 = nn.Linear(fc_dim, hidden_dim)
         self.activation = getattr(nn.functional, activation)
         self.num_heads = num_heads
+        self.dropout = nn.Dropout(dropout)
+
+        # Initialize weights with slightly larger variance
+        nn.init.xavier_uniform_(self.w_qkv.weight, gain=1.414)
+        nn.init.xavier_uniform_(self.mlp_1.weight, gain=1.414)
+        nn.init.xavier_uniform_(self.mlp_2.weight, gain=1.414)
 
     def forward(self, x):
+        # Pre-norm architecture
+        x_norm = self.ln_1(x)
+
         # Self-Attention
-        x_qkv = self.w_qkv(x)
+        x_qkv = self.w_qkv(x_norm)
         Q, K, V = x_qkv.chunk(3, -1)
         Q, K, V = split_into_heads(Q, K, V, num_heads=self.num_heads)
-        attn_out, _ = head_level_self_attention(Q, K, V)
+        attn_out, attn_weights = head_level_self_attention(Q, K, V)
         attn_out = concat_heads(attn_out)
-        attn_out += x
-        ln_1 = self.ln_1(attn_out)
 
-        # FFN
-        mlp_1 = self.mlp_1(ln_1)
-        x = self.activation(mlp_1)
-        x = self.mlp_2(x)
-        x += attn_out
-        x = self.ln_2(x)
+        # Add dropout after attention
+        attn_out = self.dropout(attn_out)
+        x = x + attn_out
+
+        # FFN with dropout
+        x_norm = self.ln_2(x)
+        mlp_out = self.mlp_1(x_norm)
+        mlp_out = self.activation(mlp_out)
+        mlp_out = self.dropout(mlp_out)  # Add dropout between FFN layers
+        mlp_out = self.mlp_2(mlp_out)
+        mlp_out = self.dropout(mlp_out)  # Add dropout after FFN
+
+        x = x + mlp_out
 
         return x
 
 
 class TransformerDecoder(nn.Module):
     def __init__(
-        self, hidden_dim, fc_dim, num_heads, num_obj, activation="relu", seq_len=256
+        self,
+        hidden_dim,
+        fc_dim,
+        num_heads,
+        num_obj,
+        activation="relu",
+        seq_len=256,
+        dropout=0.1,
     ) -> None:
         super().__init__()
         self.object_emb = nn.Embedding(num_embeddings=num_obj, embedding_dim=hidden_dim)
@@ -83,6 +103,7 @@ class TransformerDecoder(nn.Module):
         self.activation = getattr(nn.functional, activation)
         self.num_heads = num_heads
         self.num_obj = num_obj
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         # Get object queries and their positions
@@ -99,6 +120,7 @@ class TransformerDecoder(nn.Module):
         Q, K, V = split_into_heads(Q, K, V, num_heads=self.num_heads)
         self_attn_out, _ = head_level_self_attention(Q, K, V)
         self_attn_out = concat_heads(self_attn_out)
+        self_attn_out = self.dropout(self_attn_out)  # Add dropout after self-attention
         self_attn_out += tgt
         objects = self.ln_1(self_attn_out)
 
@@ -113,13 +135,18 @@ class TransformerDecoder(nn.Module):
         Q, K, V = split_into_heads(Q, K, V, num_heads=self.num_heads)
         cross_attn_out, _ = head_level_self_attention(Q, K, V)
         cross_attn_out = concat_heads(cross_attn_out)
+        cross_attn_out = self.dropout(
+            cross_attn_out
+        )  # Add dropout after cross-attention
         cross_attn_out += objects
         cross_attn_out = self.ln_2(cross_attn_out)
 
         # FFN
         mlp_1 = self.mlp_1(cross_attn_out)
         x = self.activation(mlp_1)
+        x = self.dropout(x)  # Add dropout between FFN layers
         x = self.mlp_2(x)
+        x = self.dropout(x)  # Add dropout after FFN
         x += cross_attn_out
         x = self.ln_3(x)
 
@@ -127,20 +154,26 @@ class TransformerDecoder(nn.Module):
 
 
 class PredictionHeads(nn.Module):
-    def __init__(self, num_cls, hidden_dim) -> None:
+    def __init__(self, num_cls, hidden_dim, dropout=0.1):
         super().__init__()
+        self.dropout = nn.Dropout(dropout)
+
         self.box_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(dropout),  # Add dropout between layers
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(dropout),  # Add dropout between layers
         )
 
         self.class_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(dropout),  # Add dropout between layers
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(dropout),  # Add dropout between layers
         )
 
         self.bbox_output = nn.Linear(hidden_dim, 4)  # [xmin, ymin, xmax, ymax]
@@ -169,6 +202,7 @@ class DeTr(nn.Module):
         num_decoder,
         num_obj,
         num_cls,
+        dropout=0.1,
     ) -> None:
         super().__init__()
         self.backbone = getattr(torchvision.models, backbone)(pretrained=True)
@@ -187,20 +221,26 @@ class DeTr(nn.Module):
 
         self.encoder = nn.Sequential(
             *(
-                TransformerEncoder(hidden_dim, fc_dim, num_heads, activ_fn)
+                TransformerEncoder(hidden_dim, fc_dim, num_heads, activ_fn, dropout)
                 for _ in range(num_encoder)
             )
         )
         self.decoder = nn.Sequential(
             *(
                 TransformerDecoder(
-                    hidden_dim, fc_dim, num_heads, num_obj, activ_fn, self.seq_len
+                    hidden_dim,
+                    fc_dim,
+                    num_heads,
+                    num_obj,
+                    activ_fn,
+                    self.seq_len,
+                    dropout,
                 )
                 for _ in range(num_decoder)
             )
         )
 
-        self.prediction_heads = PredictionHeads(num_cls, hidden_dim)
+        self.prediction_heads = PredictionHeads(num_cls, hidden_dim, dropout)
 
     def _compute_output_shape(self, input_shape):
         dummy_input = torch.randn(1, *input_shape)
@@ -223,37 +263,3 @@ class DeTr(nn.Module):
         classes, bboxes = self.prediction_heads(x)
 
         return classes, bboxes
-
-
-if __name__ == "__main__":
-
-    device = torch.device("mps")
-    input_shape = (3, 512, 512)
-    backbone = "resnet50"
-    num_encoder = 2
-    activ_fn = "relu"
-    num_heads = 8
-    fc_dim = 256
-    num_decoder = 2
-    num_obj = 128
-    d = 50
-    num_cls = 20
-    hidden_dim = 128
-    model = DeTr(
-        backbone,
-        hidden_dim,
-        input_shape,
-        fc_dim,
-        num_heads,
-        activ_fn,
-        num_encoder,
-        num_decoder,
-        num_obj,
-        d,
-        num_cls,
-    )
-    x = torch.randn(1, *input_shape)
-    x = x.to(device)
-    model = model.to(device)
-    classes, bboxes = model(x)
-    print(classes.shape, bboxes.shape)  # (1, num_obj, num_cls), (1, num_obj, 4)
