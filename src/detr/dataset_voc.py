@@ -5,7 +5,6 @@ from torchvision.datasets import VOCDetection
 import matplotlib.pyplot as plt
 
 CLASSES = [
-    "background",
     "aeroplane",
     "bicycle",
     "bird",
@@ -26,7 +25,7 @@ CLASSES = [
     "sofa",
     "train",
     "tvmonitor",
-    "empty",
+    "background",
 ]
 
 COLORS = [
@@ -126,24 +125,44 @@ class MyVOCDetection(VOCDetection):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.edge = 512
+        self.is_train = kwargs.get("image_set", "train") == "train"
 
-        self.T = T.Compose(
-            [
-                T.ToTensor(),
-                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-                T.Resize((self.edge, self.edge), antialias=True),
-            ]
-        )
+        # Base transforms that both train and val will use
+        base_transforms = [
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            T.Resize((self.edge, self.edge), antialias=True),
+        ]
+
+        # Additional augmentations for training
+        train_transforms = [
+            T.RandomPhotometricDistort(),
+            T.RandomZoomOut(p=0.5),
+            T.RandomIoUCrop(),
+            T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+            T.RandomGrayscale(p=0.1),
+            *base_transforms,
+        ]
+
+        self.train_transform = T.Compose(train_transforms)
+        self.val_transform = T.Compose(base_transforms)
 
     def __getitem__(self, idx):
         img, target = super().__getitem__(idx)
         # PIL image
         w, h = img.size
 
-        input_ = self.T(img)
+        # Apply appropriate transforms based on train/val
+        input_ = self.train_transform(img) if self.is_train else self.val_transform(img)
 
         # Parse VOC annotation
         boxes, classes, _, _ = parse_voc_annotation(target)
+
+        if self.is_train and len(boxes) > 0:
+            # Random horizontal flip
+            if torch.rand(1) < 0.5:
+                input_ = T.functional.hflip(input_)
+                boxes[:, 0] = 1 - boxes[:, 0]  # Flip x coordinates
 
         # Convert boxes to relative coordinates and cxcywh format
         if len(boxes) > 0:  # Only if we have boxes
