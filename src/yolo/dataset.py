@@ -1,9 +1,7 @@
-import lightning as L
 import torch
 from torchvision.datasets import VOCDetection
-from torchvision import transforms as T
-from torchvision.transforms import functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
+from torchvision import transforms
 
 CLASS_TO_IDX = {
     "aeroplane": 0,
@@ -30,23 +28,26 @@ CLASS_TO_IDX = {
 }
 
 class PascalVOCDataset(Dataset):
-    def __init__(self, root, year="2012", image_set="train", transforms=None, img_dim=448, cell_dim=7, num_anchors=2, num_classes=20):
+    def __init__(self, root, year="2012", image_set="train", transform=None, split_size=7, num_boxes=2, num_classes=20):
         self.voc_dataset = VOCDetection(
             root=root, year=year, image_set=image_set, download=True
         )
-        self.transforms = transforms
-        self.img_dim = img_dim
-        self.cell_dim = cell_dim
-        self.num_anchors = num_anchors
-        self.num_classes = num_classes
+        self.transform = transform
+        self.S = split_size
+        self.B = num_boxes
+        self.C = num_classes
         
         
     def __len__(self):
         return len(self.voc_dataset)
     
     def parse_voc_annotation(self, annotation):
-        boxes, labels = [], []
+        boxes = []
+        
+        width = float(annotation["annotation"]["size"]["width"])
+        height = float(annotation["annotation"]["size"]["height"])
         objs = annotation["annotation"]["object"]
+        
         if not isinstance(objs, list):
             objs = [objs]
             
@@ -58,39 +59,33 @@ class PascalVOCDataset(Dataset):
             ymax = float(bbox["ymax"])
             
             # Convert to center format (x, y, w, h)
-            x = (xmin + xmax) / 2
-            y = (ymin + ymax) / 2
-            w = xmax - xmin
-            h = ymax - ymin
+            x = ((xmin + xmax) / 2) / width
+            y = (ymin + ymax) / 2 / height
+            w = xmax - xmin / width
+            h = ymax - ymin / height
             
-            boxes.append([x, y, w, h])
-            labels.append(CLASS_TO_IDX[obj["name"]])
+            class_idx = CLASS_TO_IDX[obj["name"]]
             
-        return {
-            "boxes": torch.tensor(boxes, dtype=torch.float32),
-            "labels": torch.tensor(labels, dtype=torch.long),
-        }
+            boxes.append([class_idx, x, y, w, h])
+            
+        return boxes
         
     def create_yolo_target(self, target):
-        target_tensor = torch.zeros(self.cell_dim, self.cell_dim, self.num_anchors * 5 + self.num_classes) # (7, 7, 2, 30)
-        cell_size = self.img_dim / self.cell_dim
+        target_tensor = torch.zeros(self.S, self.S, 5 * self.B + self.C) # (7, 7, 30) but we consider its (7, 7, 25)
         
-        for idx in range(len(target["boxes"])):
-            x, y, w, h = target["boxes"][idx]
-            label = target["labels"][idx]
+        for idx in range(len(target)):
+            class_label, x, y, w, h = target[idx]
             
-            grid_x = int(x / cell_size)
-            grid_y = int(y / cell_size)
+            j = int(x * self.S)
+            i = int(y * self.S)
             
-            x_offset = (x % cell_size) / cell_size
-            y_offset = (y % cell_size) / cell_size
-            w_scale = w / self.img_dim
-            h_scale = h / self.img_dim
+            x_offset = x * self.S - j
+            y_offset = y * self.S - i
+            w_scale = w * self.S
+            h_scale = h * self.S
             
-            for anchor in range(self.num_anchors):
-                anchor_start = anchor * 5
-                target_tensor[grid_x, grid_y, anchor_start:anchor_start+5] = torch.tensor([x_offset, y_offset, w_scale, h_scale, 1.0])
-            target_tensor[grid_x, grid_y, self.num_anchors * 5 + label] = 1.0
+            target_tensor[i, j, self.C:self.C + 5] = torch.tensor([1, x_offset, y_offset, w_scale, h_scale])
+            target_tensor[i, j, class_label] = 1
             
         return target_tensor
 
@@ -98,8 +93,8 @@ class PascalVOCDataset(Dataset):
         image, target = self.voc_dataset[idx]
         target = self.parse_voc_annotation(target)
         
-        if self.transforms:
-            image = self.transforms(image)
+        if self.transform:
+            image = self.transform(image)
             
         target = self.create_yolo_target(target)
         
