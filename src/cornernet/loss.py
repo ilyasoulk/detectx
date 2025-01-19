@@ -63,7 +63,8 @@ def pp_loss(tag0, tag1, mask):
     pull = tag0 + tag1
 
     mask = mask.unsqueeze(1) + mask.unsqueeze(2)
-    eye = torch.eye(100,100).unsqueeze(2).expand_as(mask).to(mask.device)
+    batch_size = tag_mean.size(0)
+    eye = torch.eye(batch_size, batch_size).unsqueeze(2).expand_as(mask).to(mask.device) # create a diagonal matrix with the size of the batch size
     mask = mask - eye
     mask = mask.eq(2)
     num  = num.unsqueeze(2).expand_as(mask)

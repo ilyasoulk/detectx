@@ -18,6 +18,9 @@ class Conv(nn.Module):
 
 class Hourglass(nn.Module):
     def __init__(self, n, f):
+        """
+        Hourglass module
+        """
         super(Hourglass, self).__init__()
         for i in range(n):
             self.add_module('up{}'.format(i), Conv(f, f, bn=True))
