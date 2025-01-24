@@ -52,8 +52,7 @@ class BipartiteLoss(nn.Module):
             out_bbox_xyxy = ops.box_convert(out_bbox, in_fmt="cxcywh", out_fmt="xyxy")
             tgt_bbox_xyxy = ops.box_convert(tgt_bbox, in_fmt="cxcywh", out_fmt="xyxy")
 
-            # cost_giou = -ops.box_iou(out_bbox_xyxy, tgt_bbox_xyxy)  # (N, M)
-            cost_giou = -ops.generalized_box_iou(out_bbox_xyxy, tgt_bbox_xyxy)
+            cost_giou = -ops.box_iou(out_bbox_xyxy, tgt_bbox_xyxy)  # (N, M)
             cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)  # (N, M)
 
             # Final cost matrix
@@ -112,9 +111,7 @@ class BipartiteLoss(nn.Module):
                     target_boxes, in_fmt="cxcywh", out_fmt="xyxy"
                 )
 
-                loss_giou = (
-                    1 - ops.generalized_box_iou(src_boxes_xyxy, target_boxes_xyxy)
-                ).mean()
+                loss_giou = (1 - ops.box_iou(src_boxes_xyxy, target_boxes_xyxy)).mean()
                 losses["loss_giou"] += loss_giou
 
         # Normalize losses by batch size
