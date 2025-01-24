@@ -170,3 +170,4 @@ lightning_logs
 src/detr/logs
 src/detr/img
 src/detr/results
+uv.lock
