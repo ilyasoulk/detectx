@@ -136,38 +136,32 @@ class MyVOCDetection(VOCDetection):
 
         # Additional augmentations for training
         train_transforms = [
-            T.RandomPhotometricDistort(),
-            T.RandomZoomOut(p=0.5),
-            T.RandomIoUCrop(),
-            T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-            T.RandomGrayscale(p=0.1),
             *base_transforms,
         ]
 
         self.train_transform = T.Compose(train_transforms)
         self.val_transform = T.Compose(base_transforms)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx, get_raw=False):
         img, target = super().__getitem__(idx)
-        # PIL image
+
+        # If we want raw data for analysis, return it directly
+        if get_raw:
+            return img, target
+
+        # Rest of the method remains the same
         w, h = img.size
-
-        # Apply appropriate transforms based on train/val
         input_ = self.train_transform(img) if self.is_train else self.val_transform(img)
-
-        # Parse VOC annotation
         boxes, classes, _, _ = parse_voc_annotation(target)
 
         if self.is_train and len(boxes) > 0:
-            # Random horizontal flip
             if torch.rand(1) < 0.5:
                 input_ = T.functional.hflip(input_)
-                boxes[:, 0] = 1 - boxes[:, 0]  # Flip x coordinates
+                boxes[:, 0] = 1 - boxes[:, 0]
 
-        # Convert boxes to relative coordinates and cxcywh format
-        if len(boxes) > 0:  # Only if we have boxes
-            boxes[:, 0::2] /= w  # scale x coordinates
-            boxes[:, 1::2] /= h  # scale y coordinates
+        if len(boxes) > 0:
+            boxes[:, 0::2] /= w
+            boxes[:, 1::2] /= h
             boxes.clamp_(min=0, max=1)
             boxes = ops.box_convert(boxes, in_fmt="xyxy", out_fmt="cxcywh")
 
