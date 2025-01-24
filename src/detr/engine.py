@@ -154,7 +154,7 @@ def evaluate(model, criterion, data_loader, device):
                     metric_logger[k] = metric_logger.get(k, 0.0) + v.item()
 
             running_loss += losses.item()
-            elements += images.size(0)
+            elements += 1
 
             pbar.set_postfix(
                 {
@@ -222,6 +222,6 @@ def build(
 
     optimizer = AdamW(params, weight_decay=weight_decay)
 
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=200)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10)
 
     return model, criterion, optimizer, scheduler
