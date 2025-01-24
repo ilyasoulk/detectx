@@ -167,3 +167,6 @@ src/detr/lightning_logs
 src/detr/wandb
 src/detr/checkpoints
 lightning_logs
+src/detr/logs
+src/detr/img
+src/detr/results
