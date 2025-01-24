@@ -1,11 +1,12 @@
 from engine import build, train_one_epoch, evaluate
+
 from dataset_voc import MyVOCDetection, collate_fn
 from torch.utils.data import DataLoader
 import torch
 
 
 def main():
-    weight_dict = {"ce": 5, "bbox": 2, "giou": 2}
+    weight_dict = {"ce": 5, "bbox": 2, "giou": 1}
     batch_size = 4
     device = "mps"
     model, criterion, optimizer, scheduler = build(
@@ -16,11 +17,12 @@ def main():
         num_encoder=2,
         num_decoder=2,
         num_cls=92,
-        learning_rate=1e-3,
-        weight_decay=1e-3,
+        learning_rate=1e-4,
+        weight_decay=1e-4,
     )
     model = model.to(device)
     criterion = criterion.to(device)
+    print(sum([param.numel() for param in model.parameters()]))
 
     # Initialize best mAP tracking instead of best loss
     best_map = 0.0  # Start from 0 since mAP ranges from 0 to 1
@@ -28,6 +30,7 @@ def main():
     train_ds = MyVOCDetection(
         root="./data_voc", year="2012", image_set="train", download=True
     )
+
     val_ds = MyVOCDetection(
         root="./data_voc", year="2012", image_set="val", download=True
     )
@@ -46,12 +49,13 @@ def main():
         train_loss, train_metrics = train_one_epoch(
             model, criterion, train_loader, optimizer, device, epoch, max_norm=0.1
         )
+        scheduler.step()
 
         train_results.append(train_metrics)
 
-        if epoch % 10 == 0:
-            val_loss, val_metrics = evaluate(model, criterion, val_loader, device)
-            val_results.append(val_metrics)
+        val_loss, val_metrics = evaluate(model, criterion, val_loader, device)
+        val_results.append(val_metrics)
+        # Step the scheduler with validation mAP
 
         print(f"\nEpoch {epoch}")
         print(f"mAP train : {train_metrics}")
@@ -76,8 +80,6 @@ def main():
             }
             torch.save(checkpoint, "best_model.pth")
             print(f"Saved new best model with validation mAP: {best_map:.4f}")
-
-        scheduler.step()
 
 
 if __name__ == "__main__":
