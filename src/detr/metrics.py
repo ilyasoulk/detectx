@@ -9,8 +9,13 @@ def calculate_metrics(
     """Calculate mAP using torchmetrics"""
     metric = MeanAveragePrecision(box_format="xyxy")
 
+    # Scale boxes back to pixel coordinates (assuming 512x512 images)
+    image_size = 512
+    pred_boxes = pred_boxes * image_size
+    target_boxes = target_boxes * image_size
+
     # Filter predictions
-    keep_mask = pred_labels != 22  # TODO : make this an arugment
+    keep_mask = pred_labels != 21  # TODO : make this an arugment
     confidence_mask = pred_scores > 0.5
     final_mask = keep_mask & confidence_mask
 
